@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "arch.h"
+#include "gui_events.h"
 #include "process_api.h"
 
 #define PRIV_CMD_SNAKE 1
@@ -21,6 +22,7 @@
 #define PRIV_CMD_PROC_DUMP 13
 #define PRIV_CMD_PROC_TEST 14
 #define PRIV_CMD_PIPE_TEST 15
+#define PRIV_CMD_EXPLORER 16
 
 typedef struct {
     uint16_t year;
@@ -91,6 +93,20 @@ typedef struct {
 #define SYS_DUP2 55
 #define SYS_PIPE 56
 #define SYS_PROCESS_SNAPSHOT 57
+#define SYS_GUI_CREATE_WINDOW 58
+#define SYS_GUI_DESTROY_WINDOW 59
+#define SYS_GUI_SET_TITLE 60
+#define SYS_GUI_POLL_EVENT 61
+#define SYS_GUI_PRESENT 62
+#define SYS_GUI_GET_WINDOW_INFO 63
+#define SYS_GUI_GET_SCREEN_INFO 64
+#define SYS_GUI_REGISTER_DESKTOP 65
+#define SYS_GUI_POLL_DESKTOP_EVENT 66
+#define SYS_GUI_LIST_WINDOWS 67
+#define SYS_GUI_DESKTOP_WINDOW_ACTION 68
+#define SYS_GUI_READ_WINDOW_SURFACE 69
+#define SYS_GUI_DESKTOP_CONSUME_OPEN_PATH 70
+#define SYS_NET_GET_STATS 71
 
 void syscall_handler(arch_trap_frame_t* frame);
 int copy_from_user(void* dst, const void* user_src, uint32_t len);

@@ -7,20 +7,15 @@
 #include "mouse.h"
 #include "rtc.h"
 
+#define USERMODE_TRACE_DISPATCH 0
+
 extern uint8_t __user_region_start[];
 extern uint8_t __user_region_end[];
 extern volatile int gui_needs_redraw;
 extern volatile uint32_t timer_ticks;
-extern window_t windows[MAX_WINDOWS];
-extern int active_window_idx;
-extern int nwm_get_idx_by_type(window_type_t type);
-extern void user_snake_entry_gate();
 extern void user_netdemo_entry_gate();
 extern void user_fetch_entry_gate();
 extern void user_shell_entry_gate();
-extern void user_narcpad_entry_gate();
-extern void user_settings_entry_gate();
-extern void user_explorer_entry_gate();
 extern void vga_print(const char* str);
 extern void vga_println(const char* str);
 extern void vga_print_color(const char* str, uint8_t color);
@@ -31,13 +26,9 @@ extern void vbe_compose_scene_basic(void);
 
 typedef enum {
     USER_TASK_NONE = 0,
-    USER_TASK_SNAKE,
     USER_TASK_NETDEMO,
     USER_TASK_FETCH,
     USER_TASK_SHELL,
-    USER_TASK_NARCPAD,
-    USER_TASK_SETTINGS,
-    USER_TASK_EXPLORER,
     USER_TASK_PROCESS
 } user_task_kind_t;
 
@@ -63,13 +54,9 @@ static const char* user_https_stage_name(uint32_t stage) {
 
 static const char* user_task_kind_name(user_task_kind_t kind) {
     switch (kind) {
-        case USER_TASK_SNAKE: return "snake";
         case USER_TASK_NETDEMO: return "netdemo";
         case USER_TASK_FETCH: return "fetch";
         case USER_TASK_SHELL: return "shell";
-        case USER_TASK_NARCPAD: return "narcpad";
-        case USER_TASK_SETTINGS: return "settings";
-        case USER_TASK_EXPLORER: return "explorer";
         case USER_TASK_PROCESS: return "process";
         default: return "unknown";
     }
@@ -83,93 +70,44 @@ static void serial_write_hex_uintptr(uintptr_t value) {
 #endif
 }
 
-static arch_trap_frame_t snake_context;
 static arch_trap_frame_t netdemo_context;
 static arch_trap_frame_t fetch_context;
 static arch_trap_frame_t shell_context;
-static arch_trap_frame_t narcpad_context;
-static arch_trap_frame_t settings_context;
-static arch_trap_frame_t explorer_context;
 static user_task_kind_t active_user_task = USER_TASK_NONE;
-static int snake_best_persist = 0;
-static volatile int snake_input_pending = -1;
-static volatile int snake_running = 0;
-static volatile int narcpad_running = 0;
-static volatile int settings_running = 0;
-static volatile int explorer_running = 0;
-static uint32_t snake_last_dispatch_tick = 0U;
 static process_t* active_external_process = (process_t*)0;
-static int snake_last_head_x = -1;
-static int snake_last_head_y = -1;
-static int snake_last_len = -1;
-static int snake_last_apple_x = -1;
-static int snake_last_apple_y = -1;
-static int snake_last_dead = -1;
-static int snake_last_score = -1;
-static int snake_last_best = -1;
+
+static int init_user_memory_layout(void);
 
 #define USER_PAGE_SIZE              4096U
 #define USER_KERNEL_TRAP_STACK_PAGES 8U
-#define USER_SNAKE_STATE_PAGES      1U
-#define USER_SNAKE_STACK_PAGES      2U
 #define USER_NETDEMO_STATE_PAGES    1U
 #define USER_NETDEMO_STACK_PAGES    2U
 #define USER_FETCH_STATE_PAGES      2U
 #define USER_FETCH_STACK_PAGES      2U
 #define USER_SHELL_STATE_PAGES      6U
 #define USER_SHELL_STACK_PAGES      4U
-#define USER_NARCPAD_STATE_PAGES    1U
-#define USER_NARCPAD_STACK_PAGES    2U
-#define USER_SETTINGS_STATE_PAGES   1U
-#define USER_SETTINGS_STACK_PAGES   2U
-#define USER_EXPLORER_STATE_PAGES   1U
-#define USER_EXPLORER_STACK_PAGES   2U
-#define USER_SNAKE_STATE_VA         (USER_DATA_WINDOW_BASE + 0x0000U)
-#define USER_SNAKE_STACK_VA         (USER_DATA_WINDOW_BASE + 0x1000U)
-#define USER_NETDEMO_STATE_VA       (USER_DATA_WINDOW_BASE + 0x3000U)
-#define USER_NETDEMO_STACK_VA       (USER_DATA_WINDOW_BASE + 0x4000U)
-#define USER_FETCH_STATE_VA         (USER_DATA_WINDOW_BASE + 0x6000U)
-#define USER_FETCH_STACK_VA         (USER_DATA_WINDOW_BASE + 0x8000U)
-#define USER_SHELL_STATE_VA         (USER_DATA_WINDOW_BASE + 0xA000U)
-#define USER_SHELL_STACK_VA         (USER_DATA_WINDOW_BASE + 0x10000U)
-#define USER_NARCPAD_STATE_VA       (USER_DATA_WINDOW_BASE + 0x14000U)
-#define USER_NARCPAD_STACK_VA       (USER_DATA_WINDOW_BASE + 0x15000U)
-#define USER_SETTINGS_STATE_VA      (USER_DATA_WINDOW_BASE + 0x17000U)
-#define USER_SETTINGS_STACK_VA      (USER_DATA_WINDOW_BASE + 0x18000U)
-#define USER_EXPLORER_STATE_VA      (USER_DATA_WINDOW_BASE + 0x1A000U)
-#define USER_EXPLORER_STACK_VA      (USER_DATA_WINDOW_BASE + 0x1B000U)
+#define USER_NETDEMO_STATE_VA       (USER_DATA_WINDOW_BASE + 0xA2000U)
+#define USER_NETDEMO_STACK_VA       (USER_DATA_WINDOW_BASE + 0xA3000U)
+#define USER_FETCH_STATE_VA         (USER_DATA_WINDOW_BASE + 0xA5000U)
+#define USER_FETCH_STACK_VA         (USER_DATA_WINDOW_BASE + 0xA7000U)
+#define USER_SHELL_STATE_VA         (USER_DATA_WINDOW_BASE + 0xA9000U)
+#define USER_SHELL_STACK_VA         (USER_DATA_WINDOW_BASE + 0xAF000U)
 
-static uint8_t snake_state_region[USER_SNAKE_STATE_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t snake_stack_region[USER_SNAKE_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t snake_trap_stack_region[USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t netdemo_state_region[USER_NETDEMO_STATE_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t netdemo_stack_region[USER_NETDEMO_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t netdemo_trap_stack_region[USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t fetch_state_region[USER_FETCH_STATE_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t fetch_stack_region[USER_FETCH_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t fetch_trap_stack_region[USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t shell_state_region[USER_SHELL_STATE_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t shell_stack_region[USER_SHELL_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t shell_trap_stack_region[USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t narcpad_state_region[USER_NARCPAD_STATE_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t narcpad_stack_region[USER_NARCPAD_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t narcpad_trap_stack_region[USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t settings_state_region[USER_SETTINGS_STATE_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t settings_stack_region[USER_SETTINGS_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t settings_trap_stack_region[USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t explorer_state_region[USER_EXPLORER_STATE_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t explorer_stack_region[USER_EXPLORER_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
-static uint8_t explorer_trap_stack_region[USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE] __attribute__((aligned(USER_PAGE_SIZE)));
+static uint8_t* netdemo_state_region = (uint8_t*)0;
+static uint8_t* netdemo_stack_region = (uint8_t*)0;
+static uint8_t* netdemo_trap_stack_region = (uint8_t*)0;
+static uint8_t* fetch_state_region = (uint8_t*)0;
+static uint8_t* fetch_stack_region = (uint8_t*)0;
+static uint8_t* fetch_trap_stack_region = (uint8_t*)0;
+static uint8_t* shell_state_region = (uint8_t*)0;
+static uint8_t* shell_stack_region = (uint8_t*)0;
+static uint8_t* shell_trap_stack_region = (uint8_t*)0;
 static int user_memory_ready = 0;
 arch_trap_frame_t* user_current_task_frame_ptr = (arch_trap_frame_t*)0;
 
-user_snake_state_t* user_snake_state_ptr = (user_snake_state_t*)snake_state_region;
-user_netdemo_state_t* user_netdemo_state_ptr = (user_netdemo_state_t*)netdemo_state_region;
-user_fetch_state_t* user_fetch_state_ptr = (user_fetch_state_t*)fetch_state_region;
-user_shell_state_t* user_shell_state_ptr = (user_shell_state_t*)shell_state_region;
-user_narcpad_state_t* user_narcpad_state_ptr = (user_narcpad_state_t*)narcpad_state_region;
-user_settings_state_t* user_settings_state_ptr = (user_settings_state_t*)settings_state_region;
-user_explorer_state_t* user_explorer_state_ptr = (user_explorer_state_t*)explorer_state_region;
+user_netdemo_state_t* user_netdemo_state_ptr = (user_netdemo_state_t*)0;
+user_fetch_state_t* user_fetch_state_ptr = (user_fetch_state_t*)0;
+user_shell_state_t* user_shell_state_ptr = (user_shell_state_t*)0;
 uintptr_t user_kernel_resume_esp = 0;
 uintptr_t user_kernel_ebx = 0;
 uintptr_t user_kernel_esi = 0;
@@ -190,6 +128,20 @@ static void save_user_runtime_state(user_runtime_state_t* state) {
     state->kernel_return_mode = user_kernel_return_mode;
 }
 
+static int ensure_user_region(uint8_t** region_ptr, size_t page_count) {
+    size_t size;
+
+    if (!region_ptr || page_count == 0U) return -1;
+    if (*region_ptr) return 0;
+
+    *region_ptr = (uint8_t*)alloc_physical_pages(page_count);
+    if (!*region_ptr) return -1;
+
+    size = page_count * USER_PAGE_SIZE;
+    memset(*region_ptr, 0, size);
+    return 0;
+}
+
 static void restore_user_runtime_state(const user_runtime_state_t* state) {
     if (!state) return;
     active_user_task = state->active_user_task;
@@ -203,26 +155,38 @@ static void restore_user_runtime_state(const user_runtime_state_t* state) {
     user_kernel_return_mode = state->kernel_return_mode;
 }
 
+static int activate_builtin_user_space(void) {
+    if (init_user_memory_layout() != 0) return -1;
+
+    exec_deactivate_address_space();
+
+    if (paging_map_user_region(USER_NETDEMO_STATE_VA, (uintptr_t)netdemo_state_region,
+                               USER_NETDEMO_STATE_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
+    if (paging_map_user_region(USER_NETDEMO_STACK_VA, (uintptr_t)netdemo_stack_region,
+                               USER_NETDEMO_STACK_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
+    if (paging_map_user_region(USER_FETCH_STATE_VA, (uintptr_t)fetch_state_region,
+                               USER_FETCH_STATE_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
+    if (paging_map_user_region(USER_FETCH_STACK_VA, (uintptr_t)fetch_stack_region,
+                               USER_FETCH_STACK_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
+    if (paging_map_user_region(USER_SHELL_STATE_VA, (uintptr_t)shell_state_region,
+                               USER_SHELL_STATE_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
+    if (paging_map_user_region(USER_SHELL_STACK_VA, (uintptr_t)shell_stack_region,
+                               USER_SHELL_STACK_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
+    return 0;
+}
+
 static uintptr_t trap_stack_region_top(uint8_t* region, uint32_t size) {
     return region ? (uintptr_t)region + size : (uintptr_t)KERNEL_BOOT_STACK_TOP;
 }
 
 static uintptr_t user_task_trap_stack_top(user_task_kind_t kind) {
     switch (kind) {
-        case USER_TASK_SNAKE:
-            return trap_stack_region_top(snake_trap_stack_region, sizeof(snake_trap_stack_region));
         case USER_TASK_NETDEMO:
-            return trap_stack_region_top(netdemo_trap_stack_region, sizeof(netdemo_trap_stack_region));
+            return trap_stack_region_top(netdemo_trap_stack_region, USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE);
         case USER_TASK_FETCH:
-            return trap_stack_region_top(fetch_trap_stack_region, sizeof(fetch_trap_stack_region));
+            return trap_stack_region_top(fetch_trap_stack_region, USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE);
         case USER_TASK_SHELL:
-            return trap_stack_region_top(shell_trap_stack_region, sizeof(shell_trap_stack_region));
-        case USER_TASK_NARCPAD:
-            return trap_stack_region_top(narcpad_trap_stack_region, sizeof(narcpad_trap_stack_region));
-        case USER_TASK_SETTINGS:
-            return trap_stack_region_top(settings_trap_stack_region, sizeof(settings_trap_stack_region));
-        case USER_TASK_EXPLORER:
-            return trap_stack_region_top(explorer_trap_stack_region, sizeof(explorer_trap_stack_region));
+            return trap_stack_region_top(shell_trap_stack_region, USER_KERNEL_TRAP_STACK_PAGES * USER_PAGE_SIZE);
         case USER_TASK_PROCESS:
             if (active_external_process && active_external_process->arch.user_trap_stack_top != 0U) {
                 return active_external_process->arch.user_trap_stack_top;
@@ -235,6 +199,11 @@ static uintptr_t user_task_trap_stack_top(user_task_kind_t kind) {
 
 uintptr_t usermode_active_trap_stack_top(void) {
     return user_task_trap_stack_top(active_user_task);
+}
+
+process_t* usermode_active_process(void) {
+    if (active_user_task == USER_TASK_PROCESS && active_external_process) return active_external_process;
+    return 0;
 }
 
 static int user_context_in_user_code(uintptr_t ip) {
@@ -272,156 +241,39 @@ static int validate_process_context(process_t* proc) {
 }
 
 static void invalidate_user_task(user_task_kind_t kind) {
-    if (kind == USER_TASK_SNAKE) snake_running = 0;
-    else if (kind == USER_TASK_NETDEMO) user_netdemo_state.status = -1;
+    if (kind == USER_TASK_NETDEMO) user_netdemo_state.status = -1;
     else if (kind == USER_TASK_FETCH) user_fetch_state.status = -1;
     else if (kind == USER_TASK_SHELL) user_shell_state.status = -1;
-    else if (kind == USER_TASK_NARCPAD) narcpad_running = 0;
-    else if (kind == USER_TASK_SETTINGS) settings_running = 0;
-    else if (kind == USER_TASK_EXPLORER) explorer_running = 0;
-}
-
-static void reset_user_snake_state() {
-    memset(&user_snake_state, 0, sizeof(user_snake_state));
-    user_snake_state.best = snake_best_persist;
-}
-
-static void invalidate_snake_frame_cache() {
-    snake_last_head_x = -1;
-    snake_last_head_y = -1;
-    snake_last_len = -1;
-    snake_last_apple_x = -1;
-    snake_last_apple_y = -1;
-    snake_last_dead = -1;
-    snake_last_score = -1;
-    snake_last_best = -1;
-}
-
-static int snake_frame_changed() {
-    return user_snake_state.px[0] != snake_last_head_x ||
-           user_snake_state.py[0] != snake_last_head_y ||
-           user_snake_state.len != snake_last_len ||
-           user_snake_state.apple_x != snake_last_apple_x ||
-           user_snake_state.apple_y != snake_last_apple_y ||
-           user_snake_state.dead != snake_last_dead ||
-           user_snake_state.score != snake_last_score ||
-           user_snake_state.best != snake_last_best;
-}
-
-static void remember_snake_frame() {
-    snake_last_head_x = user_snake_state.px[0];
-    snake_last_head_y = user_snake_state.py[0];
-    snake_last_len = user_snake_state.len;
-    snake_last_apple_x = user_snake_state.apple_x;
-    snake_last_apple_y = user_snake_state.apple_y;
-    snake_last_dead = user_snake_state.dead;
-    snake_last_score = user_snake_state.score;
-    snake_last_best = user_snake_state.best;
-}
-
-static void reset_user_narcpad_state() {
-    memset(&user_narcpad_state, 0, sizeof(user_narcpad_state));
-    strncpy(user_narcpad_state.title, "untitled.txt", sizeof(user_narcpad_state.title) - 1U);
-    user_narcpad_state.title[sizeof(user_narcpad_state.title) - 1U] = '\0';
-}
-
-static void reset_user_settings_state() {
-    memset(&user_settings_state, 0, sizeof(user_settings_state));
-}
-
-static void reset_user_explorer_state(int initial_dir) {
-    memset(&user_explorer_state, 0, sizeof(user_explorer_state));
-    user_explorer_state.current_dir = initial_dir;
-    user_explorer_state.prev_dir = -1;
-    user_explorer_state.selected_idx = -1;
-}
-
-static void sync_narcpad_window_title() {
-    int idx = nwm_get_idx_by_type(WIN_TYPE_NARCPAD);
-
-    if (idx == -1) return;
-    strncpy(windows[idx].title, user_narcpad_state.title, sizeof(windows[idx].title) - 1U);
-    windows[idx].title[sizeof(windows[idx].title) - 1U] = '\0';
-}
-
-static int queue_user_event(uint16_t* types, int32_t* args, int cap,
-                            int* head, int* tail, int type, int value) {
-    int next_tail;
-
-    if (!types || !args || !head || !tail || cap <= 1) return -1;
-    next_tail = (*tail + 1) % cap;
-    if (next_tail == *head) return -1;
-    types[*tail] = (uint16_t)type;
-    args[*tail] = (int32_t)value;
-    *tail = next_tail;
-    return 0;
-}
-
-static int window_task_visible(window_type_t type) {
-    int idx = nwm_get_idx_by_type(type);
-
-    if (idx < 0 || idx >= MAX_WINDOWS) return 0;
-    return windows[idx].visible && !windows[idx].minimized;
-}
-
-static int user_queue_has_items(int head, int tail) {
-    return head != tail;
-}
-
-static int should_run_snake_task(void) {
-    return snake_running &&
-           window_task_visible(WIN_TYPE_SNAKE) &&
-           (snake_input_pending != -1 || timer_ticks != snake_last_dispatch_tick);
-}
-
-static int should_run_narcpad_task(void) {
-    return narcpad_running &&
-           window_task_visible(WIN_TYPE_NARCPAD) &&
-           user_queue_has_items(user_narcpad_state.event_head, user_narcpad_state.event_tail);
-}
-
-static int should_run_settings_task(void) {
-    return settings_running &&
-           window_task_visible(WIN_TYPE_SETTINGS) &&
-           user_queue_has_items(user_settings_state.event_head, user_settings_state.event_tail);
-}
-
-static int should_run_explorer_task(void) {
-    return explorer_running &&
-           window_task_visible(WIN_TYPE_EXPLORER) &&
-           user_queue_has_items(user_explorer_state.event_head, user_explorer_state.event_tail);
 }
 
 static int init_user_memory_layout() {
     if (user_memory_ready) return 0;
-    if (paging_map_user_region(USER_SNAKE_STATE_VA, (uintptr_t)snake_state_region,
-                               sizeof(snake_state_region), PAGING_FLAG_WRITE) != 0) return -1;
-    if (paging_map_user_region(USER_SNAKE_STACK_VA, (uintptr_t)snake_stack_region,
-                               sizeof(snake_stack_region), PAGING_FLAG_WRITE) != 0) return -1;
+    if (ensure_user_region(&netdemo_state_region, USER_NETDEMO_STATE_PAGES) != 0) return -1;
+    if (ensure_user_region(&netdemo_stack_region, USER_NETDEMO_STACK_PAGES) != 0) return -1;
+    if (ensure_user_region(&netdemo_trap_stack_region, USER_KERNEL_TRAP_STACK_PAGES) != 0) return -1;
+    if (ensure_user_region(&fetch_state_region, USER_FETCH_STATE_PAGES) != 0) return -1;
+    if (ensure_user_region(&fetch_stack_region, USER_FETCH_STACK_PAGES) != 0) return -1;
+    if (ensure_user_region(&fetch_trap_stack_region, USER_KERNEL_TRAP_STACK_PAGES) != 0) return -1;
+    if (ensure_user_region(&shell_state_region, USER_SHELL_STATE_PAGES) != 0) return -1;
+    if (ensure_user_region(&shell_stack_region, USER_SHELL_STACK_PAGES) != 0) return -1;
+    if (ensure_user_region(&shell_trap_stack_region, USER_KERNEL_TRAP_STACK_PAGES) != 0) return -1;
+
+    user_netdemo_state_ptr = (user_netdemo_state_t*)netdemo_state_region;
+    user_fetch_state_ptr = (user_fetch_state_t*)fetch_state_region;
+    user_shell_state_ptr = (user_shell_state_t*)shell_state_region;
+
     if (paging_map_user_region(USER_NETDEMO_STATE_VA, (uintptr_t)netdemo_state_region,
-                               sizeof(netdemo_state_region), PAGING_FLAG_WRITE) != 0) return -1;
+                               USER_NETDEMO_STATE_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
     if (paging_map_user_region(USER_NETDEMO_STACK_VA, (uintptr_t)netdemo_stack_region,
-                               sizeof(netdemo_stack_region), PAGING_FLAG_WRITE) != 0) return -1;
+                               USER_NETDEMO_STACK_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
     if (paging_map_user_region(USER_FETCH_STATE_VA, (uintptr_t)fetch_state_region,
-                               sizeof(fetch_state_region), PAGING_FLAG_WRITE) != 0) return -1;
+                               USER_FETCH_STATE_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
     if (paging_map_user_region(USER_FETCH_STACK_VA, (uintptr_t)fetch_stack_region,
-                               sizeof(fetch_stack_region), PAGING_FLAG_WRITE) != 0) return -1;
+                               USER_FETCH_STACK_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
     if (paging_map_user_region(USER_SHELL_STATE_VA, (uintptr_t)shell_state_region,
-                               sizeof(shell_state_region), PAGING_FLAG_WRITE) != 0) return -1;
+                               USER_SHELL_STATE_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
     if (paging_map_user_region(USER_SHELL_STACK_VA, (uintptr_t)shell_stack_region,
-                               sizeof(shell_stack_region), PAGING_FLAG_WRITE) != 0) return -1;
-    if (paging_map_user_region(USER_NARCPAD_STATE_VA, (uintptr_t)narcpad_state_region,
-                               sizeof(narcpad_state_region), PAGING_FLAG_WRITE) != 0) return -1;
-    if (paging_map_user_region(USER_NARCPAD_STACK_VA, (uintptr_t)narcpad_stack_region,
-                               sizeof(narcpad_stack_region), PAGING_FLAG_WRITE) != 0) return -1;
-    if (paging_map_user_region(USER_SETTINGS_STATE_VA, (uintptr_t)settings_state_region,
-                               sizeof(settings_state_region), PAGING_FLAG_WRITE) != 0) return -1;
-    if (paging_map_user_region(USER_SETTINGS_STACK_VA, (uintptr_t)settings_stack_region,
-                               sizeof(settings_stack_region), PAGING_FLAG_WRITE) != 0) return -1;
-    if (paging_map_user_region(USER_EXPLORER_STATE_VA, (uintptr_t)explorer_state_region,
-                               sizeof(explorer_state_region), PAGING_FLAG_WRITE) != 0) return -1;
-    if (paging_map_user_region(USER_EXPLORER_STACK_VA, (uintptr_t)explorer_stack_region,
-                               sizeof(explorer_stack_region), PAGING_FLAG_WRITE) != 0) return -1;
+                               USER_SHELL_STACK_PAGES * USER_PAGE_SIZE, PAGING_FLAG_WRITE) != 0) return -1;
     user_memory_ready = 1;
     return 0;
 }
@@ -627,10 +479,7 @@ static void dispatch_user_task(user_task_kind_t kind, arch_trap_frame_t* context
     uintptr_t stack_base = 0;
     uint32_t stack_pages = 0;
 
-    if (kind == USER_TASK_SNAKE) {
-        stack_base = USER_SNAKE_STACK_VA;
-        stack_pages = USER_SNAKE_STACK_PAGES;
-    } else if (kind == USER_TASK_NETDEMO) {
+    if (kind == USER_TASK_NETDEMO) {
         stack_base = USER_NETDEMO_STACK_VA;
         stack_pages = USER_NETDEMO_STACK_PAGES;
     } else if (kind == USER_TASK_FETCH) {
@@ -639,15 +488,11 @@ static void dispatch_user_task(user_task_kind_t kind, arch_trap_frame_t* context
     } else if (kind == USER_TASK_SHELL) {
         stack_base = USER_SHELL_STACK_VA;
         stack_pages = USER_SHELL_STACK_PAGES;
-    } else if (kind == USER_TASK_NARCPAD) {
-        stack_base = USER_NARCPAD_STACK_VA;
-        stack_pages = USER_NARCPAD_STACK_PAGES;
-    } else if (kind == USER_TASK_SETTINGS) {
-        stack_base = USER_SETTINGS_STACK_VA;
-        stack_pages = USER_SETTINGS_STACK_PAGES;
-    } else if (kind == USER_TASK_EXPLORER) {
-        stack_base = USER_EXPLORER_STACK_VA;
-        stack_pages = USER_EXPLORER_STACK_PAGES;
+    }
+
+    if (activate_builtin_user_space() != 0) {
+        invalidate_user_task(kind);
+        return;
     }
 
     if (!validate_user_context(context, stack_base, stack_pages)) {
@@ -669,6 +514,7 @@ static void dispatch_user_task(user_task_kind_t kind, arch_trap_frame_t* context
     /* User traps must land on a clean kernel stack; otherwise INT frames overwrite
        the suspended process stack frame that run_user_task will later resume. */
     arch_set_kernel_stack(trap_stack_top);
+#if USERMODE_TRACE_DISPATCH
     serial_write("[user] dispatch kind=");
     serial_write_hex32((uint32_t)kind);
     serial_write(" eip=");
@@ -676,6 +522,7 @@ static void dispatch_user_task(user_task_kind_t kind, arch_trap_frame_t* context
     serial_write(" esp=");
     serial_write_hex_uintptr(context ? arch_frame_user_sp(context) : 0U);
     serial_write_char('\n');
+#endif
     sanitize_user_context(context);
     user_current_task_frame_ptr = context;
     arch_enter_user(context);
@@ -734,7 +581,8 @@ static int run_sync_user_app(user_task_kind_t kind, arch_trap_frame_t* context, 
         dispatch_user_task(kind, context);
 
         current = process_current();
-        if (!current || strcmp(current->name, "desktop") != 0 || !screen_is_graphics_enabled()) {
+        (void)current;
+        if (!screen_is_graphics_enabled()) {
             continue;
         }
 
@@ -768,133 +616,23 @@ static int run_sync_user_app(user_task_kind_t kind, arch_trap_frame_t* context, 
 
 int init_usermode() {
     user_memory_ready = 0;
-    memset(&snake_context, 0, sizeof(snake_context));
+    if (init_user_memory_layout() != 0) return -1;
     memset(&netdemo_context, 0, sizeof(netdemo_context));
     memset(&fetch_context, 0, sizeof(fetch_context));
     memset(&shell_context, 0, sizeof(shell_context));
-    memset(&narcpad_context, 0, sizeof(narcpad_context));
-    memset(&settings_context, 0, sizeof(settings_context));
-    memset(&explorer_context, 0, sizeof(explorer_context));
-    reset_user_snake_state();
     memset(&user_netdemo_state, 0, sizeof(user_netdemo_state));
     memset(&user_fetch_state, 0, sizeof(user_fetch_state));
     memset(&user_shell_state, 0, sizeof(user_shell_state));
-    reset_user_narcpad_state();
-    reset_user_settings_state();
-    reset_user_explorer_state(-1);
-    invalidate_snake_frame_cache();
-    snake_input_pending = -1;
-    snake_running = 0;
-    narcpad_running = 0;
-    settings_running = 0;
-    explorer_running = 0;
     active_user_task = USER_TASK_NONE;
-    if (init_user_memory_layout() != 0) return -1;
-    serial_write("[user] init snake_running=");
-    serial_write_hex32((uint32_t)snake_running);
-    serial_write(" snake_eip=");
-    serial_write_hex_uintptr(arch_frame_user_ip(&snake_context));
-    serial_write(" snake_esp=");
-    serial_write_hex_uintptr(arch_frame_user_sp(&snake_context));
-    serial_write_char('\n');
+    serial_write_line("[user] init builtin user helpers");
     return 0;
 }
 
-void launch_user_snake() {
-    int sidx = nwm_get_idx_by_type(WIN_TYPE_SNAKE);
-    if (sidx != -1) {
-        windows[sidx].visible = 1;
-        windows[sidx].minimized = 0;
-        active_window_idx = sidx;
-    }
-
-    reset_user_snake_state();
-    invalidate_snake_frame_cache();
-    init_user_context(&snake_context, USER_SNAKE_STACK_VA, USER_SNAKE_STACK_PAGES,
-                      (uintptr_t)user_snake_entry_gate, USER_SNAKE_STATE_VA);
-
-    snake_input_pending = -1;
-    snake_running = 1;
-    snake_last_dispatch_tick = 0U;
-    gui_needs_redraw = 1;
-}
-
-void launch_user_narcpad() {
-    int idx = nwm_get_idx_by_type(WIN_TYPE_NARCPAD);
-
-    if (idx != -1) {
-        windows[idx].visible = 1;
-        windows[idx].minimized = 0;
-        active_window_idx = idx;
-    }
-    if (narcpad_running) return;
-
-    reset_user_narcpad_state();
-    init_user_context(&narcpad_context, USER_NARCPAD_STACK_VA, USER_NARCPAD_STACK_PAGES,
-                      (uintptr_t)user_narcpad_entry_gate, USER_NARCPAD_STATE_VA);
-    user_narcpad_state.status = USER_APP_STATUS_RUNNING;
-    narcpad_running = 1;
-    sync_narcpad_window_title();
-    gui_needs_redraw = 1;
-}
-
-void launch_user_settings() {
-    int idx = nwm_get_idx_by_type(WIN_TYPE_SETTINGS);
-
-    if (idx != -1) {
-        windows[idx].visible = 1;
-        windows[idx].minimized = 0;
-        active_window_idx = idx;
-    }
-    if (settings_running) return;
-
-    reset_user_settings_state();
-    init_user_context(&settings_context, USER_SETTINGS_STACK_VA, USER_SETTINGS_STACK_PAGES,
-                      (uintptr_t)user_settings_entry_gate, USER_SETTINGS_STATE_VA);
-    user_settings_state.status = USER_APP_STATUS_RUNNING;
-    settings_running = 1;
-    gui_needs_redraw = 1;
-}
-
-void launch_user_explorer(int initial_dir) {
-    int idx = nwm_get_idx_by_type(WIN_TYPE_EXPLORER);
-
-    if (idx != -1) {
-        windows[idx].visible = 1;
-        windows[idx].minimized = 0;
-        active_window_idx = idx;
-    }
-    if (explorer_running) return;
-
-    reset_user_explorer_state(initial_dir);
-    init_user_context(&explorer_context, USER_EXPLORER_STACK_VA, USER_EXPLORER_STACK_PAGES,
-                      (uintptr_t)user_explorer_entry_gate, USER_EXPLORER_STATE_VA);
-    user_explorer_state.status = USER_APP_STATUS_RUNNING;
-    explorer_running = 1;
-    gui_needs_redraw = 1;
-}
-
 void run_user_tasks() {
-    if (should_run_snake_task()) {
-        dispatch_user_task(USER_TASK_SNAKE, &snake_context);
-        snake_last_dispatch_tick = timer_ticks;
-    }
-    if (should_run_explorer_task()) {
-        dispatch_user_task(USER_TASK_EXPLORER, &explorer_context);
-    }
-    if (should_run_settings_task()) {
-        dispatch_user_task(USER_TASK_SETTINGS, &settings_context);
-    }
-    if (should_run_narcpad_task()) {
-        dispatch_user_task(USER_TASK_NARCPAD, &narcpad_context);
-    }
+    /* Legacy GUI apps now run as normal /bin ELF processes. */
 }
 
 void stop_all_background_user_tasks() {
-    snake_running = 0;
-    narcpad_running = 0;
-    settings_running = 0;
-    explorer_running = 0;
 }
 
 int run_user_netdemo(const char* target) {
@@ -939,19 +677,9 @@ int run_user_https_command(const char* target) {
     status = run_sync_user_app(USER_TASK_NETDEMO, &netdemo_context, &user_netdemo_state.status);
     if (status < 0) {
         vga_print_color("https: ", 0x0C);
-        if (status <= NET_ERR_INVALID && status >= NET_ERR_OVERFLOW) {
-            vga_println(net_strerror(status));
-        } else {
-            vga_println(user_tls_error_string(status));
-        }
+        vga_println(net_strerror(status));
         vga_print("https stage   : ");
         vga_println(user_https_stage_name(user_netdemo_state.debug_stage));
-        vga_print("tls stage     : ");
-        vga_println(user_tls_debug_stage_name());
-        if (user_tls_debug_detail()[0] != '\0') {
-            vga_print("tls detail    : ");
-            vga_println(user_tls_debug_detail());
-        }
         return status;
     }
 
@@ -1026,98 +754,16 @@ int run_user_shell_command(const char* command) {
     return status == USER_APP_STATUS_OK ? user_shell_state.exit_code : status;
 }
 
-void stop_user_snake() {
-    int sidx = nwm_get_idx_by_type(WIN_TYPE_SNAKE);
-    if (user_snake_state.best > snake_best_persist) {
-        snake_best_persist = user_snake_state.best;
-    }
-    snake_running = 0;
-    snake_input_pending = -1;
-    snake_last_dispatch_tick = 0U;
-    if (sidx != -1) {
-        windows[sidx].visible = 0;
-        windows[sidx].minimized = 0;
-        if (active_window_idx == sidx) active_window_idx = -1;
-    }
-    gui_needs_redraw = 1;
-}
-
-int user_snake_running() {
-    return snake_running;
-}
-
-int user_narcpad_running() {
-    return narcpad_running;
-}
-
-int user_settings_running() {
-    return settings_running;
-}
-
-int user_explorer_running() {
-    return explorer_running;
-}
-
 void usermode_debug_dump(const char* tag) {
     serial_write("[user] dump ");
     serial_write(tag ? tag : "");
-    serial_write(" snake_run=");
-    serial_write_hex32((uint32_t)snake_running);
-    serial_write(" snake_eip=");
-    serial_write_hex_uintptr(arch_frame_user_ip(&snake_context));
-    serial_write(" snake_esp=");
-    serial_write_hex_uintptr(arch_frame_user_sp(&snake_context));
+    serial_write(" active=");
+    serial_write_hex32((uint32_t)active_user_task);
     serial_write_char('\n');
-}
-
-void queue_user_snake_input(int input) {
-    snake_input_pending = input;
-}
-
-int consume_user_snake_input() {
-    int input = snake_input_pending;
-    snake_input_pending = -1;
-    return input;
-}
-
-void queue_user_narcpad_event(int type, int value) {
-    (void)queue_user_event(user_narcpad_state.event_type, user_narcpad_state.event_arg,
-                           USER_GUI_EVENT_QUEUE_CAP, &user_narcpad_state.event_head,
-                           &user_narcpad_state.event_tail, type, value);
-}
-
-void request_user_narcpad_new() {
-    if (!narcpad_running) launch_user_narcpad();
-    queue_user_narcpad_event(USER_NARCPAD_EVT_OPEN_NEW, 0);
-}
-
-void request_user_narcpad_open(const char* path) {
-    if (!path || path[0] == '\0') return;
-    if (!narcpad_running) launch_user_narcpad();
-    strncpy(user_narcpad_state.request_path, path, sizeof(user_narcpad_state.request_path) - 1U);
-    user_narcpad_state.request_path[sizeof(user_narcpad_state.request_path) - 1U] = '\0';
-    queue_user_narcpad_event(USER_NARCPAD_EVT_OPEN_PATH, 0);
-}
-
-void queue_user_settings_event(int type, int value) {
-    if (!settings_running) return;
-    (void)queue_user_event(user_settings_state.event_type, user_settings_state.event_arg,
-                           USER_GUI_EVENT_QUEUE_CAP, &user_settings_state.event_head,
-                           &user_settings_state.event_tail, type, value);
-}
-
-void queue_user_explorer_event(int type, int value) {
-    if (!explorer_running) return;
-    (void)queue_user_event(user_explorer_state.event_type, user_explorer_state.event_arg,
-                           USER_GUI_EVENT_QUEUE_CAP, &user_explorer_state.event_head,
-                           &user_explorer_state.event_tail, type, value);
 }
 
 int usermode_exit_current_task(int exit_code) {
     switch (active_user_task) {
-        case USER_TASK_SNAKE:
-            stop_user_snake();
-            return 0;
         case USER_TASK_NETDEMO:
             user_netdemo_state.status = exit_code == 0 ? USER_APP_STATUS_OK : exit_code;
             return 0;
@@ -1127,21 +773,6 @@ int usermode_exit_current_task(int exit_code) {
         case USER_TASK_SHELL:
             user_shell_state.exit_code = exit_code;
             user_shell_state.status = USER_APP_STATUS_OK;
-            return 0;
-        case USER_TASK_NARCPAD:
-            user_narcpad_state.status = USER_APP_STATUS_OK;
-            narcpad_running = 0;
-            gui_needs_redraw = 1;
-            return 0;
-        case USER_TASK_SETTINGS:
-            user_settings_state.status = USER_APP_STATUS_OK;
-            settings_running = 0;
-            gui_needs_redraw = 1;
-            return 0;
-        case USER_TASK_EXPLORER:
-            user_explorer_state.status = USER_APP_STATUS_OK;
-            explorer_running = 0;
-            gui_needs_redraw = 1;
             return 0;
         default:
             return -1;
@@ -1157,42 +788,12 @@ int usermode_schedule_current_process_exit(int exit_code) {
 }
 
 void user_yield_handler(arch_trap_frame_t* frame) {
-    if (active_user_task == USER_TASK_SNAKE) {
-        int sidx = nwm_get_idx_by_type(WIN_TYPE_SNAKE);
-        int should_redraw = snake_frame_changed();
-        snake_context = *frame;
-        remember_snake_frame();
-        if (should_redraw && sidx != -1 && windows[sidx].visible && !windows[sidx].minimized) {
-            gui_needs_redraw = 1;
-        }
-    } else if (active_user_task == USER_TASK_NETDEMO) {
+    if (active_user_task == USER_TASK_NETDEMO) {
         netdemo_context = *frame;
     } else if (active_user_task == USER_TASK_FETCH) {
         fetch_context = *frame;
     } else if (active_user_task == USER_TASK_SHELL) {
         shell_context = *frame;
-    } else if (active_user_task == USER_TASK_NARCPAD) {
-        int idx = nwm_get_idx_by_type(WIN_TYPE_NARCPAD);
-        narcpad_context = *frame;
-        sync_narcpad_window_title();
-        if (user_narcpad_state.dirty != 0) {
-            user_narcpad_state.dirty = 0;
-            if (idx != -1 && windows[idx].visible && !windows[idx].minimized) gui_needs_redraw = 1;
-        }
-    } else if (active_user_task == USER_TASK_SETTINGS) {
-        int idx = nwm_get_idx_by_type(WIN_TYPE_SETTINGS);
-        settings_context = *frame;
-        if (user_settings_state.dirty != 0) {
-            user_settings_state.dirty = 0;
-            if (idx != -1 && windows[idx].visible && !windows[idx].minimized) gui_needs_redraw = 1;
-        }
-    } else if (active_user_task == USER_TASK_EXPLORER) {
-        int idx = nwm_get_idx_by_type(WIN_TYPE_EXPLORER);
-        explorer_context = *frame;
-        if (user_explorer_state.dirty != 0) {
-            user_explorer_state.dirty = 0;
-            if (idx != -1 && windows[idx].visible && !windows[idx].minimized) gui_needs_redraw = 1;
-        }
     } else if (active_user_task == USER_TASK_PROCESS) {
         if (active_external_process) active_external_process->arch.user_frame = *frame;
     }

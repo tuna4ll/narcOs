@@ -8,21 +8,13 @@
 
 static process_t* active_external_process = (process_t*)0;
 
-static user_snake_state_t snake_state;
 static user_netdemo_state_t netdemo_state;
 static user_fetch_state_t fetch_state;
 static user_shell_state_t shell_state;
-static user_narcpad_state_t narcpad_state;
-static user_settings_state_t settings_state;
-static user_explorer_state_t explorer_state;
 
-user_snake_state_t* user_snake_state_ptr = &snake_state;
 user_netdemo_state_t* user_netdemo_state_ptr = &netdemo_state;
 user_fetch_state_t* user_fetch_state_ptr = &fetch_state;
 user_shell_state_t* user_shell_state_ptr = &shell_state;
-user_narcpad_state_t* user_narcpad_state_ptr = &narcpad_state;
-user_settings_state_t* user_settings_state_ptr = &settings_state;
-user_explorer_state_t* user_explorer_state_ptr = &explorer_state;
 
 uintptr_t user_kernel_resume_esp = 0;
 uintptr_t user_kernel_ebx = 0;
@@ -162,28 +154,12 @@ uintptr_t usermode_active_trap_stack_top(void) {
     return (uintptr_t)KERNEL_BOOT_STACK_TOP;
 }
 
-void stop_user_snake(void) {}
-int user_snake_running(void) { return 0; }
-int user_narcpad_running(void) { return 0; }
-int user_settings_running(void) { return 0; }
-int user_explorer_running(void) { return 0; }
-void launch_user_snake(void) {}
-void launch_user_narcpad(void) {}
-void launch_user_settings(void) {}
-void launch_user_explorer(int initial_dir) { (void)initial_dir; }
 void run_user_tasks(void) {}
 void stop_all_background_user_tasks(void) {}
 int run_user_netdemo(const char* target) { (void)target; return -1; }
 int run_user_https_command(const char* target) { (void)target; return -1; }
 int run_user_fetch(const char* args) { (void)args; return -1; }
 int run_user_shell_command(const char* command) { (void)command; return -1; }
-void queue_user_snake_input(int input) { (void)input; }
-int consume_user_snake_input(void) { return -1; }
-void request_user_narcpad_new(void) {}
-void request_user_narcpad_open(const char* path) { (void)path; }
-void queue_user_narcpad_event(int type, int value) { (void)type; (void)value; }
-void queue_user_settings_event(int type, int value) { (void)type; (void)value; }
-void queue_user_explorer_event(int type, int value) { (void)type; (void)value; }
 
 void user_yield_handler(arch_trap_frame_t* frame) {
     process_t* current = process_current();

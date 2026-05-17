@@ -2,7 +2,24 @@
 #include "serial.h"
 #include "string.h"
 
+#define IA32_PAT 0x00000277U
+
 static cpu_info_t cpu_info;
+
+static uint64_t cpu_read_msr(uint32_t msr) {
+    uint32_t low;
+    uint32_t high;
+
+    asm volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
+    return ((uint64_t)high << 32) | (uint64_t)low;
+}
+
+static void cpu_write_msr(uint32_t msr, uint64_t value) {
+    uint32_t low = (uint32_t)(value & 0xFFFFFFFFULL);
+    uint32_t high = (uint32_t)(value >> 32);
+
+    asm volatile("wrmsr" : : "c"(msr), "a"(low), "d"(high) : "memory");
+}
 
 static int cpu_has_cpuid() {
     uint32_t original_flags;
@@ -83,6 +100,8 @@ static void cpu_log_info() {
     serial_write_char(cpu_info.apic_supported ? '1' : '0');
     serial_write(" tsc=");
     serial_write_char(cpu_info.tsc_supported ? '1' : '0');
+    serial_write(" pat_wc=");
+    serial_write_char(cpu_info.pat_wc_enabled ? '1' : '0');
     serial_write_char('\n');
 }
 
@@ -112,8 +131,17 @@ void cpu_init() {
         cpu_info.pse_supported = (edx & (1U << 3)) != 0U;
         cpu_info.tsc_supported = (edx & (1U << 4)) != 0U;
         cpu_info.apic_supported = (edx & (1U << 9)) != 0U;
+        cpu_info.pat_supported = (edx & (1U << 16)) != 0U;
         cpu_info.fxsr_supported = (edx & (1U << 24)) != 0U;
         cpu_info.sse_supported = (edx & (1U << 25)) != 0U;
+    }
+
+    if (cpu_info.pat_supported) {
+        uint64_t pat = cpu_read_msr(IA32_PAT);
+        pat &= ~(0xFFULL << 40);
+        pat |=  (0x01ULL << 40); /* PAT entry 5: write-combining. */
+        cpu_write_msr(IA32_PAT, pat);
+        cpu_info.pat_wc_enabled = 1;
     }
 
     if (cpu_info.sse_supported && cpu_info.fxsr_supported) {
@@ -136,4 +164,8 @@ int cpu_pse_supported() {
 
 int cpu_sse_enabled() {
     return cpu_info.sse_enabled;
+}
+
+int cpu_pat_wc_enabled() {
+    return cpu_info.pat_wc_enabled;
 }

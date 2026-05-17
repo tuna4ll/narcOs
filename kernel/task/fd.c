@@ -3,7 +3,7 @@
 #include "memory_alloc.h"
 #include "string.h"
 
-extern void vga_putchar(char c);
+extern void vga_write(const char* data, uint32_t len);
 extern int console_input_read(char* buffer, uint32_t max_len);
 
 static fd_handle_t* fd_create_console_handle(uint32_t access) {
@@ -203,9 +203,7 @@ int fd_write(process_t* proc, int fd, const void* buffer, uint32_t len) {
     if (!handle || (handle->access & FD_ACCESS_WRITE) == 0U) return -1;
 
     if (handle->kind == FD_KIND_CONSOLE) {
-        const uint8_t* bytes = (const uint8_t*)buffer;
-
-        for (uint32_t i = 0; i < len; i++) vga_putchar((char)bytes[i]);
+        vga_write((const char*)buffer, len);
         return (int)len;
     }
 
@@ -245,6 +243,15 @@ int fd_write(process_t* proc, int fd, const void* buffer, uint32_t len) {
     }
 
     return -1;
+}
+
+int fd_is_console_write(process_t* proc, int fd) {
+    fd_handle_t* handle;
+
+    if (!proc || !fd_slot_valid(fd)) return 0;
+    handle = proc->fd_table[fd];
+    return handle && handle->kind == FD_KIND_CONSOLE &&
+           (handle->access & FD_ACCESS_WRITE) != 0U;
 }
 
 int fd_close(process_t* proc, int fd) {

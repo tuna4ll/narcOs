@@ -17,41 +17,54 @@ disk_fs_node_t dir_cache[MAX_FILES];
 uint8_t sector_buffer[512];
 int current_dir_index = -1;
 
+#define FS_DISTINCT_USER_PROGRAMS(X) \
+    X(hello) \
+    X(ps) \
+    X(cat) \
+    X(echo) \
+    X(kill) \
+    X(proc_test) \
+    X(pipe_test) \
+    X(neofetch) \
+    X(desktop) \
+    X(explorer) \
+    X(narcpad) \
+    X(settings) \
+    X(snake) \
+    X(core_tools) \
+    X(tls_tools)
+
+#define FS_CORE_TOOL_ALIASES(X) \
+    X(help, core_tools) \
+    X(clear, core_tools) \
+    X(ver, core_tools) \
+    X(uptime, core_tools) \
+    X(date, core_tools) \
+    X(time, core_tools) \
+    X(ls, core_tools) \
+    X(pwd, core_tools) \
+    X(http, core_tools) \
+    X(ping, core_tools) \
+    X(netdemo, core_tools) \
+    X(dns, core_tools) \
+    X(net, core_tools)
+
+#define FS_TLS_TOOL_ALIASES(X) \
+    X(https, tls_tools) \
+    X(tls_test, tls_tools) \
+    X(fetch, tls_tools)
+
 #if UINTPTR_MAX > 0xFFFFFFFFU
-extern const uint8_t _binary_obj_x86_64_user_bin_hello_start[];
-extern const uint8_t _binary_obj_x86_64_user_bin_hello_end[];
-extern const uint8_t _binary_obj_x86_64_user_bin_ps_start[];
-extern const uint8_t _binary_obj_x86_64_user_bin_ps_end[];
-extern const uint8_t _binary_obj_x86_64_user_bin_cat_start[];
-extern const uint8_t _binary_obj_x86_64_user_bin_cat_end[];
-extern const uint8_t _binary_obj_x86_64_user_bin_echo_start[];
-extern const uint8_t _binary_obj_x86_64_user_bin_echo_end[];
-extern const uint8_t _binary_obj_x86_64_user_bin_kill_start[];
-extern const uint8_t _binary_obj_x86_64_user_bin_kill_end[];
-extern const uint8_t _binary_obj_x86_64_user_bin_proc_test_start[];
-extern const uint8_t _binary_obj_x86_64_user_bin_proc_test_end[];
-extern const uint8_t _binary_obj_x86_64_user_bin_pipe_test_start[];
-extern const uint8_t _binary_obj_x86_64_user_bin_pipe_test_end[];
-extern const uint8_t _binary_obj_x86_64_user_bin_neofetch_start[];
-extern const uint8_t _binary_obj_x86_64_user_bin_neofetch_end[];
+#define FS_DECLARE_PACKAGED_BINARY(name) \
+    extern const uint8_t _binary_obj_x86_64_user_bin_##name##_start[]; \
+    extern const uint8_t _binary_obj_x86_64_user_bin_##name##_end[];
 #else
-extern const uint8_t _binary_obj_i386_user_bin_hello_start[];
-extern const uint8_t _binary_obj_i386_user_bin_hello_end[];
-extern const uint8_t _binary_obj_i386_user_bin_ps_start[];
-extern const uint8_t _binary_obj_i386_user_bin_ps_end[];
-extern const uint8_t _binary_obj_i386_user_bin_cat_start[];
-extern const uint8_t _binary_obj_i386_user_bin_cat_end[];
-extern const uint8_t _binary_obj_i386_user_bin_echo_start[];
-extern const uint8_t _binary_obj_i386_user_bin_echo_end[];
-extern const uint8_t _binary_obj_i386_user_bin_kill_start[];
-extern const uint8_t _binary_obj_i386_user_bin_kill_end[];
-extern const uint8_t _binary_obj_i386_user_bin_proc_test_start[];
-extern const uint8_t _binary_obj_i386_user_bin_proc_test_end[];
-extern const uint8_t _binary_obj_i386_user_bin_pipe_test_start[];
-extern const uint8_t _binary_obj_i386_user_bin_pipe_test_end[];
-extern const uint8_t _binary_obj_i386_user_bin_neofetch_start[];
-extern const uint8_t _binary_obj_i386_user_bin_neofetch_end[];
+#define FS_DECLARE_PACKAGED_BINARY(name) \
+    extern const uint8_t _binary_obj_i386_user_bin_##name##_start[]; \
+    extern const uint8_t _binary_obj_i386_user_bin_##name##_end[];
 #endif
+
+FS_DISTINCT_USER_PROGRAMS(FS_DECLARE_PACKAGED_BINARY)
 
 typedef struct {
     const char* path;
@@ -61,25 +74,64 @@ typedef struct {
 
 static const fs_packaged_binary_t fs_packaged_binaries[] = {
 #if UINTPTR_MAX > 0xFFFFFFFFU
-    { "/bin/hello", _binary_obj_x86_64_user_bin_hello_start, _binary_obj_x86_64_user_bin_hello_end },
-    { "/bin/ps", _binary_obj_x86_64_user_bin_ps_start, _binary_obj_x86_64_user_bin_ps_end },
-    { "/bin/cat", _binary_obj_x86_64_user_bin_cat_start, _binary_obj_x86_64_user_bin_cat_end },
-    { "/bin/echo", _binary_obj_x86_64_user_bin_echo_start, _binary_obj_x86_64_user_bin_echo_end },
-    { "/bin/kill", _binary_obj_x86_64_user_bin_kill_start, _binary_obj_x86_64_user_bin_kill_end },
-    { "/bin/proc_test", _binary_obj_x86_64_user_bin_proc_test_start, _binary_obj_x86_64_user_bin_proc_test_end },
-    { "/bin/pipe_test", _binary_obj_x86_64_user_bin_pipe_test_start, _binary_obj_x86_64_user_bin_pipe_test_end },
-    { "/bin/neofetch", _binary_obj_x86_64_user_bin_neofetch_start, _binary_obj_x86_64_user_bin_neofetch_end }
+#define FS_PACKAGED_BINARY_ENTRY(name) \
+    { "/bin/" #name, _binary_obj_x86_64_user_bin_##name##_start, _binary_obj_x86_64_user_bin_##name##_end },
+#define FS_PACKAGED_BINARY_ALIAS(alias, target) \
+    { "/bin/" #alias, _binary_obj_x86_64_user_bin_##target##_start, _binary_obj_x86_64_user_bin_##target##_end },
 #else
-    { "/bin/hello", _binary_obj_i386_user_bin_hello_start, _binary_obj_i386_user_bin_hello_end },
-    { "/bin/ps", _binary_obj_i386_user_bin_ps_start, _binary_obj_i386_user_bin_ps_end },
-    { "/bin/cat", _binary_obj_i386_user_bin_cat_start, _binary_obj_i386_user_bin_cat_end },
-    { "/bin/echo", _binary_obj_i386_user_bin_echo_start, _binary_obj_i386_user_bin_echo_end },
-    { "/bin/kill", _binary_obj_i386_user_bin_kill_start, _binary_obj_i386_user_bin_kill_end },
-    { "/bin/proc_test", _binary_obj_i386_user_bin_proc_test_start, _binary_obj_i386_user_bin_proc_test_end },
-    { "/bin/pipe_test", _binary_obj_i386_user_bin_pipe_test_start, _binary_obj_i386_user_bin_pipe_test_end },
-    { "/bin/neofetch", _binary_obj_i386_user_bin_neofetch_start, _binary_obj_i386_user_bin_neofetch_end }
+#define FS_PACKAGED_BINARY_ENTRY(name) \
+    { "/bin/" #name, _binary_obj_i386_user_bin_##name##_start, _binary_obj_i386_user_bin_##name##_end },
+#define FS_PACKAGED_BINARY_ALIAS(alias, target) \
+    { "/bin/" #alias, _binary_obj_i386_user_bin_##target##_start, _binary_obj_i386_user_bin_##target##_end },
 #endif
+    FS_DISTINCT_USER_PROGRAMS(FS_PACKAGED_BINARY_ENTRY)
+    FS_CORE_TOOL_ALIASES(FS_PACKAGED_BINARY_ALIAS)
+    FS_TLS_TOOL_ALIASES(FS_PACKAGED_BINARY_ALIAS)
 };
+
+#undef FS_PACKAGED_BINARY_ALIAS
+#undef FS_PACKAGED_BINARY_ENTRY
+#undef FS_DECLARE_PACKAGED_BINARY
+
+static size_t fs_packaged_binary_len(const fs_packaged_binary_t* entry) {
+    return entry && entry->end >= entry->start ? (size_t)(entry->end - entry->start) : 0U;
+}
+
+static const fs_packaged_binary_t* fs_find_packaged_binary(const char* path) {
+    size_t count = sizeof(fs_packaged_binaries) / sizeof(fs_packaged_binaries[0]);
+
+    if (!path || path[0] == '\0') return 0;
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(fs_packaged_binaries[i].path, path) == 0) return &fs_packaged_binaries[i];
+    }
+    return 0;
+}
+
+static const fs_packaged_binary_t* fs_find_packaged_binary_by_idx(int idx) {
+    size_t count = sizeof(fs_packaged_binaries) / sizeof(fs_packaged_binaries[0]);
+
+    if (idx < 0 || idx >= MAX_FILES) return 0;
+    for (size_t i = 0; i < count; i++) {
+        if (fs_find_node(fs_packaged_binaries[i].path) == idx) return &fs_packaged_binaries[i];
+    }
+    return 0;
+}
+
+static int fs_read_packaged_binary(const fs_packaged_binary_t* entry, void* buffer,
+                                   size_t offset, size_t max_len) {
+    uint8_t* bytes = (uint8_t*)buffer;
+    size_t len = fs_packaged_binary_len(entry);
+    size_t read_len;
+
+    if (!entry) return -1;
+    if (!bytes && max_len != 0U) return -1;
+    if (offset >= len || max_len == 0U) return 0;
+
+    read_len = len - offset;
+    if (read_len > max_len) read_len = max_len;
+    memcpy(bytes, entry->start + offset, read_len);
+    return (int)read_len;
+}
 
 static uint32_t node_sector_count(const disk_fs_node_t* node) {
     uint32_t count;
@@ -515,6 +567,7 @@ int fs_write_file(const char* name, const char* data) {
     return fs_write_file_by_idx(idx, data);
 }
 int fs_read_file_raw_by_idx(int idx, void* buffer, size_t offset, size_t max_len) {
+    const fs_packaged_binary_t* packaged;
     uint8_t* bytes = (uint8_t*)buffer;
     size_t read_len;
     uint32_t sectors;
@@ -523,6 +576,8 @@ int fs_read_file_raw_by_idx(int idx, void* buffer, size_t offset, size_t max_len
     size_t sector_offset;
 
     if (idx < 0 || idx >= MAX_FILES || dir_cache[idx].flags != FS_NODE_FILE) return -1;
+    packaged = fs_find_packaged_binary_by_idx(idx);
+    if (packaged) return fs_read_packaged_binary(packaged, buffer, offset, max_len);
     if (!bytes && max_len != 0U) return -1;
     if (offset >= dir_cache[idx].size || max_len == 0U) return 0;
 
@@ -605,8 +660,10 @@ int fs_read_file(const char* name, char* buffer, size_t max_len) {
     return fs_read_file_by_idx(idx, buffer, max_len);
 }
 int fs_read_file_raw(const char* name, void* buffer, size_t offset, size_t max_len) {
+    const fs_packaged_binary_t* packaged = fs_find_packaged_binary(name);
     int idx = fs_find_node(name);
 
+    if (packaged) return fs_read_packaged_binary(packaged, buffer, offset, max_len);
     if (idx == -1) return -1;
     return fs_read_file_raw_by_idx(idx, buffer, offset, max_len);
 }
@@ -688,10 +745,22 @@ int fs_list_dir_entries(disk_fs_node_t* out_entries, int max_entries) {
 }
 
 int fs_get_node_info(int idx, disk_fs_node_t* out_node) {
+    const fs_packaged_binary_t* packaged;
+
     if (!out_node) return -1;
     if (idx < 0 || idx >= MAX_FILES) return -1;
     if (dir_cache[idx].flags == 0) return -1;
     *out_node = dir_cache[idx];
+    packaged = fs_find_packaged_binary_by_idx(idx);
+    if (packaged) {
+        uint32_t sectors;
+        size_t len = fs_packaged_binary_len(packaged);
+
+        out_node->flags = FS_NODE_FILE;
+        out_node->size = (uint32_t)len;
+        sectors = (uint32_t)((len + 511U) / 512U);
+        memcpy(out_node->reserved, &sectors, sizeof(sectors));
+    }
     return 0;
 }
 

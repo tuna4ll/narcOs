@@ -10,7 +10,9 @@ typedef struct {
     int fxsr_supported;
     int apic_supported;
     int tsc_supported;
+    int pat_supported;
     int sse_enabled;
+    int pat_wc_enabled;
     uint32_t max_basic_leaf;
     uint32_t max_extended_leaf;
     uint8_t long_mode_supported;
@@ -25,6 +27,7 @@ void cpu_init(void);
 const cpu_info_t* cpu_get_info(void);
 int cpu_pse_supported(void);
 int cpu_sse_enabled(void);
+int cpu_pat_wc_enabled(void);
 
 uint8_t x64_inb(uint16_t port);
 void x64_outb(uint16_t port, uint8_t value);

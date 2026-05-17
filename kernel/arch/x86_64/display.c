@@ -117,7 +117,7 @@ void init_vbe(void) {
 
     framebuffer_size = (size_t)fb_pitch * (size_t)fb_height;
     framebuffer = (uint8_t*)x64_paging_map_physical(framebuffer_phys, framebuffer_size,
-                                                    X64_PAGING_FLAG_WRITE | X64_PAGING_FLAG_CACHE_DISABLE);
+                                                    X64_PAGING_FLAG_WRITE | X64_PAGING_FLAG_WRITE_COMBINING);
     if (!framebuffer) {
         graphics_enabled = 0;
         return;
@@ -221,7 +221,7 @@ void vbe_render_mouse(int x, int y) { vbe_draw_cursor(x, y); }
 void vbe_render_mouse_direct(int x, int y) { vbe_draw_cursor(x, y); }
 void* vbe_get_backbuffer(void) { return framebuffer; }
 void* vbe_get_window_buffer(void) { return framebuffer; }
-void vbe_set_target(uint8_t* buffer, uint32_t width) { (void)buffer; (void)width; }
+void vbe_set_target(uint8_t* buffer, uint32_t width, uint32_t height) { (void)buffer; (void)width; (void)height; }
 void vbe_compose_scene(window_t* windows_in, int win_count_in, int active_win_idx, int start_vis, int desktop_dir,
                        int drag_file_idx, int mx, int my, int ctx_vis, int ctx_x, int ctx_y,
                        const char** ctx_items, int ctx_count, int ctx_sel) {

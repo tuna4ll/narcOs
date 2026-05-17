@@ -1,7 +1,24 @@
 #include "cpu.h"
 #include "x64_serial.h"
 
+#define X64_IA32_PAT 0x00000277U
+
 static x64_cpu_info_t cpu_info;
+
+static uint64_t x64_read_msr(uint32_t msr) {
+    uint32_t low;
+    uint32_t high;
+
+    __asm__ volatile("rdmsr" : "=a"(low), "=d"(high) : "c"(msr));
+    return ((uint64_t)high << 32) | (uint64_t)low;
+}
+
+static void x64_write_msr(uint32_t msr, uint64_t value) {
+    uint32_t low = (uint32_t)(value & 0xFFFFFFFFULL);
+    uint32_t high = (uint32_t)(value >> 32);
+
+    __asm__ volatile("wrmsr" : : "c"(msr), "a"(low), "d"(high) : "memory");
+}
 
 static void x64_cpuid(uint32_t leaf, uint32_t subleaf,
                       uint32_t* eax, uint32_t* ebx, uint32_t* ecx, uint32_t* edx) {
@@ -35,7 +52,9 @@ void x64_cpu_init(void) {
     cpu_info.fxsr_supported = 0;
     cpu_info.apic_supported = 0;
     cpu_info.tsc_supported = 0;
+    cpu_info.pat_supported = 0;
     cpu_info.sse_enabled = 0;
+    cpu_info.pat_wc_enabled = 0;
     cpu_info.long_mode_supported = 0;
     cpu_info.vendor[0] = '\0';
 
@@ -51,6 +70,7 @@ void x64_cpu_init(void) {
         cpu_info.pse_supported = (int)((edx >> 3) & 0x1U);
         cpu_info.tsc_supported = (int)((edx >> 4) & 0x1U);
         cpu_info.apic_supported = (int)((edx >> 9) & 0x1U);
+        cpu_info.pat_supported = (int)((edx >> 16) & 0x1U);
         cpu_info.fxsr_supported = (int)((edx >> 24) & 0x1U);
         cpu_info.sse_supported = (int)((edx >> 25) & 0x1U);
         cpu_info.sse_enabled = cpu_info.sse_supported;
@@ -63,6 +83,14 @@ void x64_cpu_init(void) {
         cpu_info.long_mode_supported = (uint8_t)((edx >> 29) & 0x1U);
     }
 
+    if (cpu_info.pat_supported) {
+        uint64_t pat = x64_read_msr(X64_IA32_PAT);
+        pat &= ~(0xFFULL << 40);
+        pat |=  (0x01ULL << 40); /* PAT entry 5: write-combining. */
+        x64_write_msr(X64_IA32_PAT, pat);
+        cpu_info.pat_wc_enabled = 1;
+    }
+
     x64_serial_write("[cpu64] vendor=");
     x64_serial_write(cpu_info.vendor);
     x64_serial_write(" max_basic=");
@@ -71,6 +99,8 @@ void x64_cpu_init(void) {
     x64_serial_write_hex32(cpu_info.max_extended_leaf);
     x64_serial_write(" long_mode=");
     x64_serial_write(cpu_info.long_mode_supported ? "1" : "0");
+    x64_serial_write(" pat_wc=");
+    x64_serial_write(cpu_info.pat_wc_enabled ? "1" : "0");
     x64_serial_write_char('\n');
 }
 
@@ -92,6 +122,10 @@ int cpu_pse_supported(void) {
 
 int cpu_sse_enabled(void) {
     return cpu_info.sse_enabled;
+}
+
+int cpu_pat_wc_enabled(void) {
+    return cpu_info.pat_wc_enabled;
 }
 
 uint8_t x64_inb(uint16_t port) {

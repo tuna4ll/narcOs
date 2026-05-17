@@ -1,6 +1,7 @@
 roadmap.txt
 boot/*.bin
 kernel.bin
+kernel.elf
 minios.img
 obj/
 plan.md

@@ -125,6 +125,58 @@ static inline int user_pipe(int out_fds[2]) {
     return (int)user_syscall1(SYS_PIPE, (uintptr_t)out_fds);
 }
 
+static inline int user_gui_create_window(const gui_create_window_params_t* params) {
+    return (int)user_syscall1(SYS_GUI_CREATE_WINDOW, (uintptr_t)params);
+}
+
+static inline int user_gui_destroy_window(int handle) {
+    return (int)user_syscall1(SYS_GUI_DESTROY_WINDOW, (uintptr_t)handle);
+}
+
+static inline int user_gui_set_title(int handle, const char* title) {
+    return (int)user_syscall2(SYS_GUI_SET_TITLE, (uintptr_t)handle, (uintptr_t)title);
+}
+
+static inline int user_gui_poll_event(int handle, gui_window_event_t* out_event) {
+    return (int)user_syscall2(SYS_GUI_POLL_EVENT, (uintptr_t)handle, (uintptr_t)out_event);
+}
+
+static inline int user_gui_present(int handle, const gui_present_params_t* params) {
+    return (int)user_syscall2(SYS_GUI_PRESENT, (uintptr_t)handle, (uintptr_t)params);
+}
+
+static inline int user_gui_get_window_info(int handle, gui_window_info_t* out_info) {
+    return (int)user_syscall2(SYS_GUI_GET_WINDOW_INFO, (uintptr_t)handle, (uintptr_t)out_info);
+}
+
+static inline int user_gui_get_screen_info(gui_screen_info_t* out_info) {
+    return (int)user_syscall1(SYS_GUI_GET_SCREEN_INFO, (uintptr_t)out_info);
+}
+
+static inline int user_gui_register_desktop(void) {
+    return (int)user_syscall0(SYS_GUI_REGISTER_DESKTOP);
+}
+
+static inline int user_gui_poll_desktop_event(gui_window_event_t* out_event) {
+    return (int)user_syscall1(SYS_GUI_POLL_DESKTOP_EVENT, (uintptr_t)out_event);
+}
+
+static inline int user_gui_list_windows(gui_window_snapshot_entry_t* entries, int max_entries) {
+    return (int)user_syscall2(SYS_GUI_LIST_WINDOWS, (uintptr_t)entries, (uintptr_t)max_entries);
+}
+
+static inline int user_gui_desktop_window_action(const gui_desktop_window_action_t* action) {
+    return (int)user_syscall1(SYS_GUI_DESKTOP_WINDOW_ACTION, (uintptr_t)action);
+}
+
+static inline int user_gui_read_window_surface(gui_window_surface_read_t* request) {
+    return (int)user_syscall1(SYS_GUI_READ_WINDOW_SURFACE, (uintptr_t)request);
+}
+
+static inline int user_gui_consume_open_path(char* path, uint32_t max_len) {
+    return (int)user_syscall2(SYS_GUI_DESKTOP_CONSUME_OPEN_PATH, (uintptr_t)path, max_len);
+}
+
 static inline int user_process_snapshot(process_snapshot_entry_t* entries, int max_entries) {
     return (int)user_syscall2(SYS_PROCESS_SNAPSHOT, (uintptr_t)entries, (uintptr_t)max_entries);
 }
@@ -231,6 +283,10 @@ static inline int user_save_timezone_setting(void) {
 
 static inline int user_net_get_config(net_ipv4_config_t* out_config) {
     return (int)user_syscall1(SYS_NET_GET_CONFIG, (uintptr_t)out_config);
+}
+
+static inline int user_net_get_stats(net_stats_t* out_stats) {
+    return (int)user_syscall1(SYS_NET_GET_STATS, (uintptr_t)out_stats);
 }
 
 static inline int user_net_dhcp(void) {

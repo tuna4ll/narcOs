@@ -15,6 +15,17 @@
 
 typedef struct process process_t;
 
+enum {
+    USER_SNAKE_SURFACE_W = 426,
+    USER_SNAKE_SURFACE_H = 384,
+    USER_NARCPAD_SURFACE_W = 881,
+    USER_NARCPAD_SURFACE_H = 535,
+    USER_SETTINGS_SURFACE_W = 520,
+    USER_SETTINGS_SURFACE_H = 420,
+    USER_EXPLORER_SURFACE_W = 1280,
+    USER_EXPLORER_SURFACE_H = 960
+};
+
 typedef struct {
     int px[100];
     int py[100];
@@ -26,6 +37,10 @@ typedef struct {
     int best;
     int dir;
     int last_tick;
+    int render_w;
+    int render_h;
+    uint32_t* surface_ptr;
+    uint32_t surface[USER_SNAKE_SURFACE_W * USER_SNAKE_SURFACE_H];
 } user_snake_state_t;
 
 typedef struct {
@@ -72,15 +87,25 @@ typedef enum {
     USER_NARCPAD_EVT_NEWLINE,
     USER_NARCPAD_EVT_SAVE,
     USER_NARCPAD_EVT_OPEN_NEW,
-    USER_NARCPAD_EVT_OPEN_PATH
+    USER_NARCPAD_EVT_OPEN_PATH,
+    USER_NARCPAD_EVT_SCROLL
 } user_narcpad_event_t;
 
 typedef enum {
     USER_SETTINGS_EVT_NONE = 0,
     USER_SETTINGS_EVT_ADJUST_OFFSET,
     USER_SETTINGS_EVT_SET_OFFSET,
-    USER_SETTINGS_EVT_OPEN_CONFIG
+    USER_SETTINGS_EVT_OPEN_CONFIG,
+    USER_SETTINGS_EVT_POINTER_DOWN,
+    USER_SETTINGS_EVT_KEY_DOWN
 } user_settings_event_t;
+
+#define USER_SETTINGS_POINT_X_MASK 0xFFFF
+#define USER_SETTINGS_POINT_Y_MASK 0xFFFF
+#define USER_SETTINGS_PACK_POINT(x, y) \
+    ((((int32_t)(y) & USER_SETTINGS_POINT_Y_MASK) << 16) | ((int32_t)(x) & USER_SETTINGS_POINT_X_MASK))
+#define USER_SETTINGS_POINT_X(value) ((int16_t)((value) & USER_SETTINGS_POINT_X_MASK))
+#define USER_SETTINGS_POINT_Y(value) ((int16_t)(((value) >> 16) & USER_SETTINGS_POINT_Y_MASK))
 
 typedef enum {
     USER_EXPLORER_MODAL_NONE = 0,
@@ -104,13 +129,28 @@ typedef enum {
     USER_EXPLORER_EVT_MOVE_SELECTED_TO,
     USER_EXPLORER_EVT_GO_BACK,
     USER_EXPLORER_EVT_GO_UP,
-    USER_EXPLORER_EVT_REFRESH
+    USER_EXPLORER_EVT_REFRESH,
+    USER_EXPLORER_EVT_POINTER_DOWN,
+    USER_EXPLORER_EVT_POINTER_UP,
+    USER_EXPLORER_EVT_POINTER_DBLCLICK,
+    USER_EXPLORER_EVT_POINTER_WHEEL
 } user_explorer_event_t;
+
+#define USER_EXPLORER_POINT_X_MASK 0xFFFF
+#define USER_EXPLORER_POINT_Y_MASK 0xFFFF
+#define USER_EXPLORER_PACK_POINT(x, y) \
+    ((((int32_t)(y) & USER_EXPLORER_POINT_Y_MASK) << 16) | ((int32_t)(x) & USER_EXPLORER_POINT_X_MASK))
+#define USER_EXPLORER_POINT_X(value) ((int16_t)((value) & USER_EXPLORER_POINT_X_MASK))
+#define USER_EXPLORER_POINT_Y(value) ((int16_t)(((value) >> 16) & USER_EXPLORER_POINT_Y_MASK))
 
 typedef struct {
     int status;
     int dirty;
+    int last_blink_phase;
     int view_scroll;
+    int render_w;
+    int render_h;
+    uint32_t* surface;
     int event_head;
     int event_tail;
     uint16_t event_type[USER_GUI_EVENT_QUEUE_CAP];
@@ -124,6 +164,9 @@ typedef struct {
 typedef struct {
     int status;
     int dirty;
+    int render_w;
+    int render_h;
+    uint32_t* surface;
     int event_head;
     int event_tail;
     uint16_t event_type[USER_GUI_EVENT_QUEUE_CAP];
@@ -133,12 +176,16 @@ typedef struct {
 typedef struct {
     int status;
     int dirty;
+    int render_w;
+    int render_h;
     int current_dir;
     int prev_dir;
     int selected_idx;
     int list_scroll;
+    int drag_candidate_idx;
     int modal_mode;
     int modal_input_len;
+    uint32_t* surface;
     int event_head;
     int event_tail;
     uint16_t event_type[USER_GUI_EVENT_QUEUE_CAP];
@@ -147,10 +194,6 @@ typedef struct {
 } user_explorer_state_t;
 
 int init_usermode();
-void launch_user_snake();
-void launch_user_narcpad();
-void launch_user_settings();
-void launch_user_explorer(int initial_dir);
 void run_user_tasks();
 void stop_all_background_user_tasks();
 int run_user_netdemo(const char* target);
@@ -161,36 +204,17 @@ int usermode_prepare_process_context(process_t* proc);
 int usermode_run_external_process(process_t* proc);
 int usermode_schedule_current_process_exit(int exit_code);
 uintptr_t usermode_active_trap_stack_top(void);
-void stop_user_snake();
-int user_snake_running();
-int user_narcpad_running();
-int user_settings_running();
-int user_explorer_running();
-void queue_user_snake_input(int input);
-int consume_user_snake_input();
-void request_user_narcpad_new();
-void request_user_narcpad_open(const char* path);
-void queue_user_narcpad_event(int type, int value);
-void queue_user_settings_event(int type, int value);
-void queue_user_explorer_event(int type, int value);
+process_t* usermode_active_process(void);
 void user_yield_handler(arch_trap_frame_t* frame);
 void usermode_debug_dump(const char* tag);
 int usermode_exit_current_task(int exit_code);
 
-extern user_snake_state_t* user_snake_state_ptr;
 extern user_netdemo_state_t* user_netdemo_state_ptr;
 extern user_fetch_state_t* user_fetch_state_ptr;
 extern user_shell_state_t* user_shell_state_ptr;
-extern user_narcpad_state_t* user_narcpad_state_ptr;
-extern user_settings_state_t* user_settings_state_ptr;
-extern user_explorer_state_t* user_explorer_state_ptr;
-#define user_snake_state    (*user_snake_state_ptr)
 #define user_netdemo_state  (*user_netdemo_state_ptr)
 #define user_fetch_state    (*user_fetch_state_ptr)
 #define user_shell_state    (*user_shell_state_ptr)
-#define user_narcpad_state  (*user_narcpad_state_ptr)
-#define user_settings_state (*user_settings_state_ptr)
-#define user_explorer_state (*user_explorer_state_ptr)
 extern uintptr_t user_kernel_resume_esp;
 extern uintptr_t user_kernel_ebx;
 extern uintptr_t user_kernel_esi;

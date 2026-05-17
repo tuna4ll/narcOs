@@ -7,8 +7,9 @@
 #include "string.h"
 #include "usermode.h"
 #include "rtc.h"
+#include "vbe.h"
 
-#define MAX_PROCESSES 8
+#define MAX_PROCESSES 16
 #define PROCESS_STACK_PAGES 4
 #define PROCESS_USER_TRAP_STACK_PAGES 8
 #define SCHED_SLICE_TICKS 2
@@ -21,6 +22,11 @@ volatile int scheduler_pending = 0;
 extern volatile int gui_needs_redraw;
 extern int screen_is_graphics_enabled(void);
 extern void vbe_compose_scene_basic(void);
+extern void nwm_close_windows_for_owner(int owner_pid);
+extern int get_mouse_x(void);
+extern int get_mouse_y(void);
+extern int mouse_left_pressed(void);
+extern int mouse_right_pressed(void);
 
 void process_bootstrap_entry(void);
 static void idle_process(void* arg);
@@ -43,6 +49,8 @@ static void process_reset_unused(process_t* proc);
 static const char* process_state_name(process_state_t state);
 static const char* process_kind_name(process_kind_t kind);
 static void process_pump_gui_if_needed(void);
+static int process_user_space_ready(process_t* proc);
+static int process_find_desktop_runnable(void);
 
 #if UINTPTR_MAX > 0xFFFFFFFFU
 extern void x64_process_bootstrap_trampoline(void);
@@ -52,6 +60,16 @@ extern volatile uint32_t timer_ticks;
 
 static void process_pump_gui_if_needed(void) {
     static uint32_t last_clock_tick = 0;
+    static uint32_t last_present_tick = 0;
+    static int last_mx = -1;
+    static int last_my = -1;
+    static int last_lp = -1;
+    static int last_rp = -1;
+    int mx;
+    int my;
+    int lp;
+    int rp;
+    int needs_present = 0;
 
     if (!screen_is_graphics_enabled()) return;
     if (timer_ticks - last_clock_tick >= 100U) {
@@ -59,10 +77,25 @@ static void process_pump_gui_if_needed(void) {
         last_clock_tick = timer_ticks;
         gui_needs_redraw = 1;
     }
-    if (gui_needs_redraw) {
-        vbe_compose_scene_basic();
-        gui_needs_redraw = 0;
+
+    mx = get_mouse_x();
+    my = get_mouse_y();
+    lp = mouse_left_pressed();
+    rp = mouse_right_pressed();
+    if (mx != last_mx || my != last_my || lp != last_lp || rp != last_rp) {
+        needs_present = 1;
     }
+    if (gui_needs_redraw) needs_present = 1;
+    if (!needs_present) return;
+    if (last_present_tick != 0U && timer_ticks == last_present_tick) return;
+
+    vbe_compose_scene_basic();
+    gui_needs_redraw = 0;
+    last_present_tick = timer_ticks;
+    last_mx = mx;
+    last_my = my;
+    last_lp = lp;
+    last_rp = rp;
 }
 
 static void process_log_hex_uintptr(uintptr_t value) {
@@ -73,10 +106,39 @@ static void process_log_hex_uintptr(uintptr_t value) {
 #endif
 }
 
+static int process_user_space_ready(process_t* proc) {
+    if (!proc || proc->kind != PROCESS_KIND_USER) return 0;
+    if (!proc->user_space.valid &&
+        proc->user_space.image.entry_point != 0U &&
+        proc->user_space.image.stack_top != 0U &&
+        proc->user_space.mapping_count != 0U) {
+        proc->user_space.valid = 1;
+    }
+    return proc->user_space.valid != 0;
+}
+
 static int next_runnable_from(int start) {
+    int desktop_idx = process_find_desktop_runnable();
+
+    if (desktop_idx >= 0 && desktop_idx != current_process_idx &&
+        screen_is_graphics_enabled() && nwm_desktop_events_pending()) {
+        return desktop_idx;
+    }
     for (int offset = 1; offset <= MAX_PROCESSES; offset++) {
         int idx = (start + offset) % MAX_PROCESSES;
         if (process_table[idx].state == PROC_RUNNABLE) return idx;
+    }
+    return -1;
+}
+
+static int process_find_desktop_runnable(void) {
+    int desktop_pid = nwm_get_desktop_owner_pid();
+
+    if (desktop_pid <= 0) return -1;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].state != PROC_RUNNABLE) continue;
+        if (process_table[i].kind != PROCESS_KIND_USER) continue;
+        if (process_table[i].pid == desktop_pid) return i;
     }
     return -1;
 }
@@ -161,7 +223,7 @@ int process_create_user(const char* path, const char* const* argv, int argc, uin
         serial_write(" status=");
         serial_write_hex32((uint32_t)status);
         serial_write_char('\n');
-        if (caller && caller != proc && caller->kind == PROCESS_KIND_USER && caller->user_space.valid) {
+        if (caller && caller != proc && process_user_space_ready(caller)) {
             (void)exec_activate_address_space(&caller->user_space);
         }
         process_abandon_reserved_slot(proc);
@@ -171,13 +233,13 @@ int process_create_user(const char* path, const char* const* argv, int argc, uin
         serial_write("[sched] user context init failed ");
         serial_write(path);
         serial_write_char('\n');
-        if (caller && caller != proc && caller->kind == PROCESS_KIND_USER && caller->user_space.valid) {
+        if (caller && caller != proc && process_user_space_ready(caller)) {
             (void)exec_activate_address_space(&caller->user_space);
         }
         process_abandon_reserved_slot(proc);
         return -1;
     }
-    if (caller && caller != proc && caller->kind == PROCESS_KIND_USER && caller->user_space.valid) {
+    if (caller && caller != proc && process_user_space_ready(caller)) {
         (void)exec_activate_address_space(&caller->user_space);
     }
 
@@ -461,8 +523,23 @@ void process_exit_current(int exit_code) {
         for (;;) asm volatile("hlt");
     }
     if (current->kind == PROCESS_KIND_USER) {
+        serial_write("[sched] exit pid=");
+        serial_write_hex32((uint32_t)current->pid);
+        serial_write(" code=");
+        serial_write_hex32((uint32_t)exit_code);
+        serial_write(" name=");
+        serial_write(current->name);
+        if (current->image_path[0] != '\0') {
+            serial_write(" image=");
+            serial_write(current->image_path);
+        }
+        serial_write_char('\n');
+    }
+    if (current->kind == PROCESS_KIND_USER) {
         current->flags &= ~PROCESS_FLAG_USER_EXIT_PENDING;
         process_clear_pending_request(current);
+        nwm_release_desktop_owner(current->pid);
+        nwm_close_windows_for_owner(current->pid);
         exec_release_address_space(&current->user_space);
     }
     fd_cleanup_process(current);
@@ -513,7 +590,9 @@ int process_waitpid_sync_current(int pid, uint32_t flags, int* out_status) {
             return status;
         }
         if (current->killed != 0U || (current->flags & PROCESS_FLAG_USER_EXIT_PENDING) != 0U) return -1;
+        process_pump_gui_if_needed();
         process_yield();
+        process_pump_gui_if_needed();
     }
 }
 
@@ -779,7 +858,7 @@ static int process_exec_replace_current(process_t* proc) {
         serial_write(" status=");
         serial_write_hex32((uint32_t)status);
         serial_write_char('\n');
-        if (proc->user_space.valid) (void)exec_activate_address_space(&proc->user_space);
+        if (process_user_space_ready(proc)) (void)exec_activate_address_space(&proc->user_space);
         return -1;
     }
 

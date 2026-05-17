@@ -9,8 +9,9 @@ int kernel_run_privileged_command(int cmd, const char* arg) {
     return -1;
 }
 
-int kernel_gui_open_narcpad_file(const char* path) {
+int kernel_gui_consume_desktop_open_path(char* path, size_t path_size) {
     (void)path;
+    (void)path_size;
     return -1;
 }
 

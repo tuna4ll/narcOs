@@ -33,7 +33,8 @@
 #define EXEC_USER_STACK_BASE  (USER_DATA_WINDOW_BASE + USER_DATA_WINDOW_SIZE - EXEC_USER_STACK_SIZE)
 #define EXEC_USER_STACK_TOP   (USER_DATA_WINDOW_BASE + USER_DATA_WINDOW_SIZE)
 #define EXEC_USER_IMAGE_LIMIT EXEC_USER_STACK_BASE
-#define EXEC_MAX_IMAGE_MAPPINGS 9U
+#define EXEC_MAX_IMAGE_MAPPINGS 32U
+#define EXEC_MAPPING_FLAG_HEAP 0x80000000U
 
 typedef struct {
     uint32_t entry_point;
@@ -66,6 +67,7 @@ int exec_load_elf32_file(const char* path, exec_address_space_t* out_space);
 int exec_load_elf64_file(const char* path, exec_address_space_t* out_space);
 void exec_release_address_space(exec_address_space_t* space);
 int exec_activate_address_space(const exec_address_space_t* space);
+void exec_deactivate_address_space(void);
 int exec_query_image(const exec_address_space_t* space, exec_image_t* out_image);
 const char* exec_error_string(int status);
 const char* exec_supported_mode_string(void);

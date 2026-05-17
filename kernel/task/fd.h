@@ -41,6 +41,7 @@ void fd_cleanup_process(process_t* proc);
 void fd_close_from(process_t* proc, int first_fd);
 int fd_read(process_t* proc, int fd, void* buffer, uint32_t len);
 int fd_write(process_t* proc, int fd, const void* buffer, uint32_t len);
+int fd_is_console_write(process_t* proc, int fd);
 int fd_close(process_t* proc, int fd);
 int fd_dup2(process_t* proc, int oldfd, int newfd);
 int fd_pipe(process_t* proc, int out_fds[2]);

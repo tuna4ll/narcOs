@@ -1,10 +1,10 @@
 /* linker_i386.ld */
-OUTPUT_FORMAT(binary)
+OUTPUT_FORMAT(elf32-i386)
 ENTRY(_start)
 
 SECTIONS
 {
-    . = 0x10000;
+    . = 0xC000;
 
     .text : ALIGN(4096)
     {
@@ -33,54 +33,6 @@ SECTIONS
         obj/i386/apps/user_net_apps.o(.data.*)
         obj/i386/apps/user_net_apps.o(.bss)
         obj/i386/apps/user_net_apps.o(.bss.*)
-        obj/i386/apps/user_narcpad.o(.rodata)
-        obj/i386/apps/user_narcpad.o(.rodata.*)
-        obj/i386/apps/user_narcpad.o(.data)
-        obj/i386/apps/user_narcpad.o(.data.*)
-        obj/i386/apps/user_narcpad.o(.bss)
-        obj/i386/apps/user_narcpad.o(.bss.*)
-        obj/i386/apps/user_settings.o(.rodata)
-        obj/i386/apps/user_settings.o(.rodata.*)
-        obj/i386/apps/user_settings.o(.data)
-        obj/i386/apps/user_settings.o(.data.*)
-        obj/i386/apps/user_settings.o(.bss)
-        obj/i386/apps/user_settings.o(.bss.*)
-        obj/i386/apps/user_explorer.o(.rodata)
-        obj/i386/apps/user_explorer.o(.rodata.*)
-        obj/i386/apps/user_explorer.o(.data)
-        obj/i386/apps/user_explorer.o(.data.*)
-        obj/i386/apps/user_explorer.o(.bss)
-        obj/i386/apps/user_explorer.o(.bss.*)
-        obj/i386/apps/user_tls.o(.rodata)
-        obj/i386/apps/user_tls.o(.rodata.*)
-        obj/i386/apps/user_tls.o(.data)
-        obj/i386/apps/user_tls.o(.data.*)
-        obj/i386/apps/user_tls.o(.bss)
-        obj/i386/apps/user_tls.o(.bss.*)
-        obj/i386/apps/user_tls_crypto.o(.rodata)
-        obj/i386/apps/user_tls_crypto.o(.rodata.*)
-        obj/i386/apps/user_tls_crypto.o(.data)
-        obj/i386/apps/user_tls_crypto.o(.data.*)
-        obj/i386/apps/user_tls_crypto.o(.bss)
-        obj/i386/apps/user_tls_crypto.o(.bss.*)
-        obj/i386/apps/user_tls_bigint.o(.rodata)
-        obj/i386/apps/user_tls_bigint.o(.rodata.*)
-        obj/i386/apps/user_tls_bigint.o(.data)
-        obj/i386/apps/user_tls_bigint.o(.data.*)
-        obj/i386/apps/user_tls_bigint.o(.bss)
-        obj/i386/apps/user_tls_bigint.o(.bss.*)
-        obj/i386/apps/user_tls_x509.o(.rodata)
-        obj/i386/apps/user_tls_x509.o(.rodata.*)
-        obj/i386/apps/user_tls_x509.o(.data)
-        obj/i386/apps/user_tls_x509.o(.data.*)
-        obj/i386/apps/user_tls_x509.o(.bss)
-        obj/i386/apps/user_tls_x509.o(.bss.*)
-        obj/i386/apps/user_tls_pins.o(.rodata)
-        obj/i386/apps/user_tls_pins.o(.rodata.*)
-        obj/i386/apps/user_tls_pins.o(.data)
-        obj/i386/apps/user_tls_pins.o(.data.*)
-        obj/i386/apps/user_tls_pins.o(.bss)
-        obj/i386/apps/user_tls_pins.o(.bss.*)
         . = ALIGN(4096);
         __user_region_end = .;
     }
@@ -97,7 +49,7 @@ SECTIONS
         *(.data.*)
     }
 
-    ASSERT(. <= 0x000B8000, "Kernel file-backed image overlaps VGA text memory")
+    ASSERT(. <= 0x000A0000, "Kernel file-backed image overlaps VGA memory aperture")
 
     . = 0x00100000;
 

@@ -144,9 +144,19 @@ static USER_CODE int shell_write_fd(int fd, const void* data, uint32_t len) {
 
 static USER_CODE void shell_println(const char* text) {
     const char* msg = text ? text : "";
+    char line[256];
+    uint32_t len = (uint32_t)strlen(msg);
 
-    (void)shell_write_fd(1, msg, (uint32_t)strlen(msg));
+    if (len + 1U < sizeof(line)) {
+        memcpy(line, msg, len);
+        line[len] = '\n';
+        (void)shell_write_fd(1, line, len + 1U);
+        user_yield();
+        return;
+    }
+    (void)shell_write_fd(1, msg, len);
     (void)shell_write_fd(1, "\n", 1U);
+    user_yield();
 }
 
 static USER_CODE void shell_print_raw(const char* text) {
@@ -856,14 +866,14 @@ static USER_CODE int shell_run_ping(user_shell_state_t* state, const char* arg) 
 
 static USER_CODE int shell_run_ntp(user_shell_state_t* state, const char* arg) {
     uint32_t unix_seconds = 0;
-    const char* host = (arg && arg[0] != '\0') ? arg : user_tls_default_ntp_host();
+    const char* host = (arg && arg[0] != '\0') ? arg : "time.google.com";
     char line[160];
     rtc_local_time_t utc_time;
     int status;
     int off = 0;
 
     if (!state) return -1;
-    status = user_tls_get_utc_unix_time_for_host((arg && arg[0] != '\0') ? arg : (const char*)0, &unix_seconds);
+    status = user_net_ntp_query(host, &unix_seconds);
     if (status != NET_OK) {
         line[0] = '\0';
         off = 0;
@@ -944,6 +954,7 @@ static USER_CODE int shell_run_http(user_shell_state_t* state, const char* arg) 
     return shell_print_http_response(arg, state->scratch, &state->http_result);
 }
 
+#if 0
 static USER_CODE int shell_run_https(user_shell_state_t* state, const char* arg) {
     char host[96];
     char path[160];
@@ -982,6 +993,7 @@ static USER_CODE int shell_run_https(user_shell_state_t* state, const char* arg)
     }
     return shell_print_http_response(arg, state->scratch, &state->http_result);
 }
+#endif
 
 static USER_CODE int shell_run_netdemo(user_shell_state_t* state, const char* arg) {
     char host[96];
@@ -1011,6 +1023,7 @@ static USER_CODE int shell_run_netdemo(user_shell_state_t* state, const char* ar
     return 0;
 }
 
+#if 0
 static USER_CODE int shell_run_fetch(user_shell_state_t* state, const char* arg) {
     char host[96];
     char path[160];
@@ -1090,7 +1103,9 @@ static USER_CODE int shell_run_fetch(user_shell_state_t* state, const char* arg)
     if (state->http_result.complete == 0U) shell_println(msg_http_partial);
     return 0;
 }
+#endif
 
+#if 0
 static USER_CODE void shell_print_tls_summary_line(const char* label, uint32_t value) {
     char line[96];
     int off = 0;
@@ -1140,6 +1155,7 @@ static USER_CODE int shell_run_tls_test(user_shell_state_t* state, const char* a
     }
     return status;
 }
+#endif
 
 static USER_CODE int shell_run_edit(const char* arg) {
     char line[192];
@@ -1230,17 +1246,9 @@ static USER_CODE int shell_wait_for_child(int pid, int* out_status) {
 }
 
 static USER_CODE int shell_is_builtin_command(const char* command) {
-    return strcmp(command, "help") == 0 ||
-           strcmp(command, "clear") == 0 ||
-           strcmp(command, "mem") == 0 ||
+    return strcmp(command, "mem") == 0 ||
            strcmp(command, "snake") == 0 ||
            strcmp(command, "settings") == 0 ||
-           strcmp(command, "ver") == 0 ||
-           strcmp(command, "uptime") == 0 ||
-           strcmp(command, "date") == 0 ||
-           strcmp(command, "time") == 0 ||
-           strcmp(command, "ls") == 0 ||
-           strcmp(command, "pwd") == 0 ||
            strcmp(command, "ps") == 0 ||
            strcmp(command, "procdump") == 0 ||
            strcmp(command, "proc_test") == 0 ||
@@ -1258,16 +1266,8 @@ static USER_CODE int shell_is_builtin_command(const char* command) {
            strcmp(command, "rm") == 0 ||
            strcmp(command, "mv") == 0 ||
            strcmp(command, "ren") == 0 ||
-           strcmp(command, "net") == 0 ||
            strcmp(command, "dhcp") == 0 ||
-           strcmp(command, "dns") == 0 ||
-           strcmp(command, "ping") == 0 ||
            strcmp(command, "ntp") == 0 ||
-           strcmp(command, "http") == 0 ||
-           strcmp(command, "https") == 0 ||
-           strcmp(command, "netdemo") == 0 ||
-           strcmp(command, "fetch") == 0 ||
-           strcmp(command, "tls_test") == 0 ||
            strcmp(command, "malloc_test") == 0 ||
            strcmp(command, "usermode_test") == 0 ||
            strcmp(command, "hwinfo") == 0 ||
@@ -1329,6 +1329,14 @@ static USER_CODE int shell_run_spawn_builtin(const char* args) {
     (void)shell_append_uint(line, sizeof(line), &off, (uint32_t)pid);
     shell_println(line);
     return 0;
+}
+
+static USER_CODE int shell_spawn_gui_app(const char* path) {
+    const char* argv[1];
+
+    if (!path || path[0] == '\0') return -1;
+    argv[0] = path;
+    return user_spawn(path, argv, 1U) >= 0 ? 0 : -1;
 }
 
 static USER_CODE int shell_run_wait_builtin(const char* args) {
@@ -1479,23 +1487,9 @@ static USER_CODE int shell_try_run_builtin(user_shell_state_t* state, const char
                                            const char* args, int* out_status) {
     int status = 0;
 
-    if (strcmp(command, "help") == 0) shell_run_help();
-    else if (strcmp(command, "clear") == 0) user_clear_screen();
-    else if (strcmp(command, "mem") == 0) status = shell_run_privileged(PRIV_CMD_MEM, "", "error: Unable to show memory map.");
-    else if (strcmp(command, "snake") == 0) status = shell_run_privileged(PRIV_CMD_SNAKE, "", "error: snake requires graphics mode.");
-    else if (strcmp(command, "settings") == 0) status = shell_run_privileged(PRIV_CMD_SETTINGS, "", "error: settings requires graphics mode.");
-    else if (strcmp(command, "ver") == 0) shell_println("NarcOs");
-    else if (strcmp(command, "uptime") == 0) {
-        char line[96];
-        int off = 0;
-        line[0] = '\0';
-        (void)shell_append_text(line, sizeof(line), &off, "System Uptime (seconds): ");
-        (void)shell_append_uint(line, sizeof(line), &off, user_uptime_ticks() / 100U);
-        shell_println(line);
-    } else if (strcmp(command, "date") == 0) status = shell_run_local_date(state, 1);
-    else if (strcmp(command, "time") == 0) status = shell_run_local_date(state, 0);
-    else if (strcmp(command, "ls") == 0) status = shell_run_ls(state);
-    else if (strcmp(command, "pwd") == 0) status = shell_run_pwd(state);
+    if (strcmp(command, "mem") == 0) status = shell_run_privileged(PRIV_CMD_MEM, "", "error: Unable to show memory map.");
+    else if (strcmp(command, "snake") == 0) status = shell_spawn_gui_app("/bin/snake");
+    else if (strcmp(command, "settings") == 0) status = shell_spawn_gui_app("/bin/settings");
     else if (strcmp(command, "ps") == 0) status = shell_run_ps();
     else if (strcmp(command, "procdump") == 0) status = shell_run_privileged(PRIV_CMD_PROC_DUMP, "", "error: Unable to dump process table.");
     else if (strcmp(command, "proc_test") == 0) status = shell_run_privileged(PRIV_CMD_PROC_TEST, "", "error: proc_test failed.");
@@ -1513,16 +1507,8 @@ static USER_CODE int shell_try_run_builtin(user_shell_state_t* state, const char
     else if (strcmp(command, "rm") == 0) status = shell_run_rm(args);
     else if (strcmp(command, "mv") == 0) status = shell_run_mv(args);
     else if (strcmp(command, "ren") == 0) status = shell_run_ren(args);
-    else if (strcmp(command, "net") == 0) status = shell_run_net_status();
     else if (strcmp(command, "dhcp") == 0) status = shell_run_dhcp();
-    else if (strcmp(command, "dns") == 0) status = shell_run_dns(args);
-    else if (strcmp(command, "ping") == 0) status = shell_run_ping(state, args);
     else if (strcmp(command, "ntp") == 0) status = shell_run_ntp(state, args);
-    else if (strcmp(command, "http") == 0) status = shell_run_http(state, args);
-    else if (strcmp(command, "https") == 0) status = shell_run_https(state, args);
-    else if (strcmp(command, "netdemo") == 0) status = shell_run_netdemo(state, args);
-    else if (strcmp(command, "fetch") == 0) status = shell_run_fetch(state, args);
-    else if (strcmp(command, "tls_test") == 0) status = shell_run_tls_test(state, args);
     else if (strcmp(command, "malloc_test") == 0) status = shell_run_privileged(PRIV_CMD_MALLOC_TEST, "", "error: malloc_test failed.");
     else if (strcmp(command, "usermode_test") == 0) status = shell_run_privileged(PRIV_CMD_USERMODE_TEST, "", "error: usermode_test requires graphics mode.");
     else if (strcmp(command, "hwinfo") == 0) status = shell_run_privileged(PRIV_CMD_HWINFO, "", "error: Unable to show hardware info.");

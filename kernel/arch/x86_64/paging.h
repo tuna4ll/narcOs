@@ -7,11 +7,16 @@
 #define KERNEL_BOOT_STACK_TOP      0x0ULL
 #define KERNEL_BOOT_STACK_PAGES    8U
 #define USER_DATA_WINDOW_BASE      0x0000000040000000ULL
-#define USER_DATA_WINDOW_SIZE      0x0000000000800000ULL
+/*
+ * GUI app state, per-app surfaces and exec user images share this window.
+ * 1080p desktop compositing needs room for the framebuffer plus window caches.
+ */
+#define USER_DATA_WINDOW_SIZE      0x0000000004000000ULL
 #define PAGING_FLAG_WRITE          0x002ULL
 #define PAGING_FLAG_USER           0x004ULL
 #define PAGING_FLAG_WRITE_THROUGH  0x008ULL
 #define PAGING_FLAG_CACHE_DISABLE  0x010ULL
+#define PAGING_FLAG_WRITE_COMBINING 0x100ULL
 
 void init_paging(void);
 void* alloc_physical_page(void);

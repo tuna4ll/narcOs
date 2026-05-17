@@ -7,11 +7,16 @@
 #define KERNEL_BOOT_STACK_TOP      0x02C00000U
 #define KERNEL_BOOT_STACK_PAGES    8U
 #define USER_DATA_WINDOW_BASE      0x40000000U
-#define USER_DATA_WINDOW_SIZE      0x00800000U
+/*
+ * GUI app state, per-app surfaces and exec user images now share this window.
+ * 8 MiB no longer covers the explorer surface layout safely.
+ */
+#define USER_DATA_WINDOW_SIZE      0x01000000U
 #define PAGING_FLAG_WRITE          0x002U
 #define PAGING_FLAG_USER           0x004U
 #define PAGING_FLAG_WRITE_THROUGH  0x008U
 #define PAGING_FLAG_CACHE_DISABLE  0x010U
+#define PAGING_FLAG_WRITE_COMBINING 0x100U
 
 void init_paging();
 void* alloc_physical_page();

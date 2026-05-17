@@ -15,12 +15,16 @@ SECTIONS
     {
         *(.text)
         *(.text.*)
+        *(.user_code)
+        *(.user_code.*)
     } :text
 
     .rodata : ALIGN(16)
     {
         *(.rodata)
         *(.rodata.*)
+        *(.user_rodata)
+        *(.user_rodata.*)
     } :text
 
     .data : ALIGN(4096)
@@ -29,7 +33,7 @@ SECTIONS
         *(.data.*)
     } :data
 
-    .bss : ALIGN(16)
+    .bss : ALIGN(4096)
     {
         *(COMMON)
         *(.bss)

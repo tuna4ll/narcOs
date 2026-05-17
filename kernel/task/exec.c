@@ -308,6 +308,12 @@ int exec_activate_address_space(const exec_address_space_t* space) {
     return EXEC_OK;
 }
 
+void exec_deactivate_address_space(void) {
+    if (!exec_active_space) return;
+    exec_unmap_address_space(exec_active_space);
+    exec_active_space = 0;
+}
+
 int exec_query_image(const exec_address_space_t* space, exec_image_t* out_image) {
     if (!space || !out_image || !space->valid) return EXEC_ERR_INVALID;
     *out_image = space->image;

@@ -13,10 +13,6 @@ extern %2
     jmp %%yield_forever
 %endmacro
 
-USER_GATE user_snake_entry_gate, user_snake_entry_c
 USER_GATE user_netdemo_entry_gate, user_netdemo_entry_c
 USER_GATE user_fetch_entry_gate, user_fetch_entry_c
 USER_GATE user_shell_entry_gate, user_shell_entry_c
-USER_GATE user_narcpad_entry_gate, user_narcpad_entry_c
-USER_GATE user_settings_entry_gate, user_settings_entry_c
-USER_GATE user_explorer_entry_gate, user_explorer_entry_c

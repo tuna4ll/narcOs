@@ -1,4 +1,5 @@
 #include "paging.h"
+#include "cpu.h"
 #include "string.h"
 
 #define PAGE_SIZE 4096U
@@ -31,6 +32,7 @@
 #define PDE_USER    0x004U
 #define PDE_PS      0x080U
 #define PTE_PRESENT 0x001U
+#define PTE_PAT     0x080U
 
 typedef struct {
     uint64_t base_addr;
@@ -79,8 +81,15 @@ static void paging_invalidate_page(void* addr) {
 }
 
 static uint32_t paging_allowed_pte_flags(uint32_t flags) {
-    return flags & (PAGING_FLAG_WRITE | PAGING_FLAG_USER |
-                    PAGING_FLAG_WRITE_THROUGH | PAGING_FLAG_CACHE_DISABLE);
+    uint32_t pte_flags = flags & (PAGING_FLAG_WRITE | PAGING_FLAG_USER |
+                                  PAGING_FLAG_WRITE_THROUGH | PAGING_FLAG_CACHE_DISABLE);
+
+    if ((flags & PAGING_FLAG_WRITE_COMBINING) != 0U) {
+        pte_flags &= ~(PAGING_FLAG_WRITE_THROUGH | PAGING_FLAG_CACHE_DISABLE);
+        if (cpu_pat_wc_enabled()) pte_flags |= PTE_PAT | PAGING_FLAG_WRITE_THROUGH;
+        else pte_flags |= PAGING_FLAG_CACHE_DISABLE;
+    }
+    return pte_flags;
 }
 
 static void low_identity_mark_user_range(uint32_t start_addr, uint32_t end_addr, uint32_t flags) {

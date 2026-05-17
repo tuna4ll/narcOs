@@ -121,17 +121,12 @@ void init_keyboard()
 extern window_t windows[MAX_WINDOWS];
 extern int window_count;
 extern int active_window_idx;
+extern int screen_is_graphics_enabled(void);
 
-extern volatile int snk_next_dir;
 extern volatile int editor_running;
 extern volatile int editor_input_key;
 extern volatile int editor_special_key;
 extern volatile int gui_needs_redraw;
-extern int explorer_modal_active();
-extern void explorer_cancel_modal();
-extern void explorer_modal_submit();
-extern void explorer_modal_backspace();
-extern void explorer_modal_append_char(char c);
 extern void vga_scrollback_page(int direction);
 extern void vga_scrollback_home(void);
 extern void vga_scrollback_end(void);
@@ -202,6 +197,135 @@ static void autocomplete_input_line() {
     }
 }
 
+static int keyboard_dispatch_legacy_or_console(uint8_t scancode, int modifiers, char c) {
+    int is_shift = (modifiers & 1) != 0;
+    int text_console_active = !screen_is_graphics_enabled();
+    int terminal_active = terminal_window_active();
+
+    if (terminal_active) {
+        if (scancode == 0x49) {
+            vga_scrollback_page(1);
+            return 1;
+        }
+        if (scancode == 0x51) {
+            vga_scrollback_page(-1);
+            return 1;
+        }
+        if (scancode == 0x47) {
+            vga_scrollback_home();
+            return 1;
+        }
+        if (scancode == 0x4F) {
+            vga_scrollback_end();
+            return 1;
+        }
+    }
+    if (editor_running) {
+        switch (scancode) {
+            case 0x48: editor_special_key = 1; break;
+            case 0x50: editor_special_key = 2; break;
+            case 0x4B: editor_special_key = 3; break;
+            case 0x4D: editor_special_key = 4; break;
+            case 0x0E: editor_special_key = 5; break;
+            case 0x1C: editor_special_key = 6; break;
+            case 0x1F: if (!is_shift && c != 'S') editor_special_key = 7; else editor_input_key = c; break;
+            case 0x3C: editor_special_key = 7; break;
+            case 0x01: editor_special_key = 8; break;
+            default:
+                if (c != 0) editor_input_key = c;
+                break;
+        }
+        return 1;
+    }
+    if (!terminal_active && !text_console_active) return 0;
+    if (scancode == 0x0E) {
+        vga_scrollback_follow_live();
+        if (input_pos > 0) {
+            input_pos--;
+            input_buf[input_pos] = '\0';
+            vga_backspace();
+        }
+    }
+    else if (scancode == 0x1C) {
+        vga_scrollback_follow_live();
+        vga_newline();
+        input_buf[input_pos] = '\0';
+        console_input_enqueue_line(input_buf);
+        if (input_pos > 0) {
+            int last_idx = (history_write_idx + HISTORY_MAX - 1) % HISTORY_MAX;
+            int is_same = 0;
+            if (history_count > 0) {
+                int k = 0;
+                is_same = 1;
+                while (input_buf[k] != '\0' || history[last_idx][k] != '\0') {
+                    if (input_buf[k] != history[last_idx][k]) {
+                        is_same = 0;
+                        break;
+                    }
+                    k++;
+                }
+            }
+            if (!is_same) {
+                int k = 0;
+                while (input_buf[k] != '\0' && k < INPUT_BUF_SIZE - 1) {
+                    history[history_write_idx][k] = input_buf[k];
+                    k++;
+                }
+                history[history_write_idx][k] = '\0';
+                history_write_idx = (history_write_idx + 1) % HISTORY_MAX;
+                if (history_count < HISTORY_MAX) history_count++;
+            }
+        }
+        history_current_idx = -1;
+        for (int i = 0; i < INPUT_BUF_SIZE; i++) cmd_to_execute[i] = input_buf[i];
+        cmd_ready = 1;
+        input_pos = 0;
+        for (int i = 0; i < INPUT_BUF_SIZE; i++) input_buf[i] = 0;
+    }
+    else if (scancode == 0x48) {
+        if (history_count > 0) {
+            if (history_current_idx == -1) {
+                history_current_idx = (history_write_idx + HISTORY_MAX - 1) % HISTORY_MAX;
+            } else {
+                int next_back = (history_current_idx + HISTORY_MAX - 1) % HISTORY_MAX;
+                int oldest_idx = history_count < HISTORY_MAX ? 0 : history_write_idx;
+                if (history_current_idx != oldest_idx) history_current_idx = next_back;
+            }
+            set_input_line(history[history_current_idx]);
+        }
+    }
+    else if (scancode == 0x50) {
+        if (history_current_idx != -1) {
+            int next_forward = (history_current_idx + 1) % HISTORY_MAX;
+            if (next_forward == history_write_idx) {
+                history_current_idx = -1;
+                set_input_line("");
+            } else {
+                history_current_idx = next_forward;
+                set_input_line(history[history_current_idx]);
+            }
+        }
+    }
+    else if (scancode == 0x0F) {
+        autocomplete_input_line();
+    }
+    else if (c != 0 && input_pos < INPUT_BUF_SIZE - 1) {
+        vga_scrollback_follow_live();
+        input_buf[input_pos++] = c;
+        vga_putchar(c);
+    }
+    return 1;
+}
+
+int keyboard_deliver_desktop_input(uint8_t scancode, int modifiers) {
+    int is_shift = (modifiers & 1) != 0;
+    char c = is_shift ? scancode_map_shift[scancode] : scancode_map[scancode];
+
+    if ((modifiers & 4) != 0 && c >= 'a' && c <= 'z') c -= 32;
+    else if ((modifiers & 4) != 0 && c >= 'A' && c <= 'Z') c += 32;
+    return keyboard_dispatch_legacy_or_console(scancode, modifiers, c);
+}
+
 int console_input_read(char* buffer, uint32_t max_len) {
     uint32_t flags;
     uint32_t copied = 0;
@@ -261,192 +385,22 @@ void handle_keyboard()
     }
     int is_shift = lshift_pressed || rshift_pressed;
     int is_ctrl = lctrl_pressed || rctrl_pressed;
-    if (explorer_modal_active()) {
-        char c = is_shift ? scancode_map_shift[scancode] : scancode_map[scancode];
-        if (capslock_active && c >= 'a' && c <= 'z') c -= 32;
-        else if (capslock_active && c >= 'A' && c <= 'Z') c += 32;
-        if (scancode == 0x0E) explorer_modal_backspace();
-        else if (scancode == 0x1C) explorer_modal_submit();
-        else if (scancode == 0x01) explorer_cancel_modal();
-        else if (c != 0) explorer_modal_append_char(c);
-        outb(0x20, 0x20);
-        return;
-    }
-    if (terminal_window_active()) {
-        if (scancode == 0x49) {
-            vga_scrollback_page(1);
-            outb(0x20, 0x20);
-            return;
-        }
-        if (scancode == 0x51) {
-            vga_scrollback_page(-1);
-            outb(0x20, 0x20);
-            return;
-        }
-        if (scancode == 0x47) {
-            vga_scrollback_home();
-            outb(0x20, 0x20);
-            return;
-        }
-        if (scancode == 0x4F) {
-            vga_scrollback_end();
-            outb(0x20, 0x20);
-            return;
-        }
-    }
-    if (active_window_idx != -1 && windows[active_window_idx].visible && windows[active_window_idx].type == WIN_TYPE_SNAKE) {
-        switch (scancode) {
-            case 0x11: case 0x48:
-                if (user_snake_running()) queue_user_snake_input(0);
-                else snk_next_dir = 0;
-                break;
-            case 0x1F: case 0x50:
-                if (user_snake_running()) queue_user_snake_input(1);
-                else snk_next_dir = 1;
-                break;
-            case 0x1E: case 0x4B:
-                if (user_snake_running()) queue_user_snake_input(2);
-                else snk_next_dir = 2;
-                break;
-            case 0x20: case 0x4D:
-                if (user_snake_running()) queue_user_snake_input(3);
-                else snk_next_dir = 3;
-                break;
-            case 0x13: case 0x19:
-                if (user_snake_running()) queue_user_snake_input(5);
-                else snk_next_dir = 5;
-                break;
-            case 0x10: case 0x01:
-                if (user_snake_running()) queue_user_snake_input(6);
-                else snk_next_dir = 6;
-                break;
-            default: break;
-        }
-        outb(0x20, 0x20); return;
-    }
-    if (active_window_idx != -1 && windows[active_window_idx].visible && windows[active_window_idx].type == WIN_TYPE_NARCPAD) {
-        char c = is_shift ? scancode_map_shift[scancode] : scancode_map[scancode];
-        if (capslock_active && c >= 'a' && c <= 'z') c -= 32;
-        else if (capslock_active && c >= 'A' && c <= 'Z') c += 32;
+    char c = is_shift ? scancode_map_shift[scancode] : scancode_map[scancode];
+    int modifiers = (is_shift ? 1 : 0) | (is_ctrl ? 2 : 0) | (capslock_active ? 4 : 0);
 
-        if (is_ctrl && scancode == 0x1F) {
-            queue_user_narcpad_event(USER_NARCPAD_EVT_SAVE, 0);
-        } else if (scancode == 0x0E) {
-            queue_user_narcpad_event(USER_NARCPAD_EVT_BACKSPACE, 0);
-        } else if (scancode == 0x1C) {
-            queue_user_narcpad_event(USER_NARCPAD_EVT_NEWLINE, 0);
-        } else if (c != 0) {
-            queue_user_narcpad_event(USER_NARCPAD_EVT_CHAR, (int)c);
-        }
+    if (capslock_active && c >= 'a' && c <= 'z') c -= 32;
+    else if (capslock_active && c >= 'A' && c <= 'Z') c += 32;
+
+    if (!screen_is_graphics_enabled()) {
+        keyboard_dispatch_legacy_or_console(scancode, modifiers, c);
         outb(0x20, 0x20);
         return;
     }
-    if (editor_running) {
-        char c = is_shift ? scancode_map_shift[scancode] : scancode_map[scancode];
-        switch (scancode) {
-            case 0x48: editor_special_key = 1; break;
-            case 0x50: editor_special_key = 2; break;
-            case 0x4B: editor_special_key = 3; break;
-            case 0x4D: editor_special_key = 4; break;
-            case 0x0E: editor_special_key = 5; break;
-            case 0x1C: editor_special_key = 6; break;
-            case 0x1F: if (lshift_pressed == 0 && rshift_pressed == 0 && c != 'S') editor_special_key = 7; else editor_input_key = c; break;
-            case 0x3C: editor_special_key = 7; break;
-            case 0x01: editor_special_key = 8; break;
-            default:
-                if (c != 0) {
-                    if (capslock_active && c >= 'a' && c <= 'z') c -= 32;
-                    else if (capslock_active && c >= 'A' && c <= 'Z') c += 32;
-                    editor_input_key = c;
-                }
-                break;
-        }
-        outb(0x20, 0x20);
-        return;
-    }
-    if (scancode == 0x0E) {
-        vga_scrollback_follow_live();
-        if (input_pos > 0) {
-            input_pos--;
-            input_buf[input_pos] = '\0';
-            vga_backspace();
-        }
-    }
-    else if (scancode == 0x1C) {
-        vga_scrollback_follow_live();
-        vga_newline();
-        input_buf[input_pos] = '\0';
-        console_input_enqueue_line(input_buf);
-        if (input_pos > 0) {
-            int last_idx = (history_write_idx + HISTORY_MAX - 1) % HISTORY_MAX;
-            int is_same = 0;
-            if (history_count > 0) {
-                int k = 0;
-                is_same = 1;
-                while (input_buf[k] != '\0' || history[last_idx][k] != '\0') {
-                    if (input_buf[k] != history[last_idx][k]) {
-                        is_same = 0;
-                        break;
-                    }
-                    k++;
-                }
-            }
-            if (!is_same) {
-                int k = 0;
-                while (input_buf[k] != '\0' && k < INPUT_BUF_SIZE - 1) {
-                    history[history_write_idx][k] = input_buf[k];
-                    k++;
-                }
-                history[history_write_idx][k] = '\0';
-                history_write_idx = (history_write_idx + 1) % HISTORY_MAX;
-                if (history_count < HISTORY_MAX) history_count++;
-            }
-        }
-        history_current_idx = -1; 
-        for (int i = 0; i < INPUT_BUF_SIZE; i++)
-            cmd_to_execute[i] = input_buf[i];
-        cmd_ready = 1;
-        input_pos = 0;
-        for (int i = 0; i < INPUT_BUF_SIZE; i++) input_buf[i] = 0;
-    }
-    else if (scancode == 0x48) { 
-        if (history_count > 0) {
-            if (history_current_idx == -1) {
-                history_current_idx = (history_write_idx + HISTORY_MAX - 1) % HISTORY_MAX;
-            } else {
-                int next_back = (history_current_idx + HISTORY_MAX - 1) % HISTORY_MAX;
-                int oldest_idx = history_count < HISTORY_MAX ? 0 : history_write_idx;
-                if (history_current_idx != oldest_idx) {
-                    history_current_idx = next_back;
-                }
-            }
-            set_input_line(history[history_current_idx]);
-        }
-    }
-    else if (scancode == 0x50) { 
-        if (history_current_idx != -1) {
-            int next_forward = (history_current_idx + 1) % HISTORY_MAX;
-            if (next_forward == history_write_idx) {
-                history_current_idx = -1;
-                set_input_line("");
-            } else {
-                history_current_idx = next_forward;
-                set_input_line(history[history_current_idx]);
-            }
-        }
-    }
-    else if (scancode == 0x0F) {
-        autocomplete_input_line();
-    }
-    else {
-        char c = is_shift ? scancode_map_shift[scancode] : scancode_map[scancode];
-        if (capslock_active && c >= 'a' && c <= 'z') c -= 32;
-        else if (capslock_active && c >= 'A' && c <= 'Z') c += 32;
-        if (c != 0 && input_pos < INPUT_BUF_SIZE - 1) {
-            vga_scrollback_follow_live();
-            input_buf[input_pos++] = c;
-            vga_putchar(c);
-        }
-    }
+
+    nwm_queue_desktop_event(GUI_WIN_EVT_KEY_DOWN, (int16_t)scancode, 0, modifiers);
+    if (scancode == 0x0E) nwm_queue_desktop_event(GUI_WIN_EVT_CHAR, '\b', 0, 0);
+    else if (scancode == 0x1C) nwm_queue_desktop_event(GUI_WIN_EVT_CHAR, '\n', 0, 0);
+    else if (c != 0) nwm_queue_desktop_event(GUI_WIN_EVT_CHAR, (int16_t)c, 0, 0);
+
     outb(0x20, 0x20);
 }

@@ -13,6 +13,7 @@
 
 #define UI_GLYPH_W         7
 #define UI_GLYPH_ADVANCE   7
+#define VBE_TARGET_SLOT_BYTES 0x01000000U
 
 extern disk_fs_node_t dir_cache[MAX_FILES];
 extern volatile uint32_t timer_ticks;
@@ -54,6 +55,7 @@ static uint8_t* backbuffer = (uint8_t*)0x3000000;
 static uint8_t* wallpaper_buffer = (uint8_t*)0x4000000;
 static uint8_t* window_buffer = (uint8_t*)0x5000000;
 static uint8_t* composition_buffer = (uint8_t*)0x6000000;
+static uint8_t* legacy_window_surface_buffer = (uint8_t*)0x7000000;
 #else
 /*
  * On i386 these addresses must remain inside the low identity mapped region;
@@ -63,14 +65,21 @@ static uint8_t* backbuffer = (uint8_t*)0x800000;
 static uint8_t* wallpaper_buffer = (uint8_t*)0x1000000;
 static uint8_t* window_buffer = (uint8_t*)0x1800000;
 static uint8_t* composition_buffer = (uint8_t*)0x2000000;
+static uint8_t* legacy_window_surface_buffer = (uint8_t*)0x2800000;
 #endif
 static uint8_t* framebuffer = 0;
 static int wallpaper_init = 0;
 
 volatile int gui_needs_redraw = 1;
 
+#if defined(__x86_64__)
+static uint8_t* current_target = (uint8_t*)0x3000000;
+#else
 static uint8_t* current_target = (uint8_t*)0x800000;
+#endif
 static uint32_t current_target_width = 0;
+static uint32_t current_target_height = 0;
+static uint32_t current_target_capacity = VBE_TARGET_SLOT_BYTES;
 
 void vbe_put_pixel_to(uint8_t* buffer, uint32_t buf_width, int x, int y, uint32_t color);
 void vbe_put_pixel_alpha(int x, int y, uint32_t color, int alpha);
@@ -78,9 +87,13 @@ void vbe_put_pixel_alpha(int x, int y, uint32_t color, int alpha);
 #if defined(__x86_64__)
 extern const uint8_t _binary_obj_x86_64_assets_bg_rgb_start[];
 extern const uint8_t _binary_obj_x86_64_assets_bg_rgb_end[];
+extern const uint8_t _binary_obj_x86_64_assets_logo_rgb_start[];
+extern const uint8_t _binary_obj_x86_64_assets_logo_rgb_end[];
 #else
 extern const uint8_t _binary_obj_i386_assets_bg_rgb_start[];
 extern const uint8_t _binary_obj_i386_assets_bg_rgb_end[];
+extern const uint8_t _binary_obj_i386_assets_logo_rgb_start[];
+extern const uint8_t _binary_obj_i386_assets_logo_rgb_end[];
 #endif
 
 typedef struct {
@@ -100,6 +113,21 @@ static uint8_t* vbe_frontbuffer(void) {
     return (uint8_t*)(uintptr_t)mode_info->framebuffer;
 }
 
+static uint32_t vbe_target_capacity_for(uint8_t* buffer) {
+    if (!buffer) return 0;
+    if (buffer == backbuffer ||
+        buffer == wallpaper_buffer ||
+        buffer == window_buffer ||
+        buffer == composition_buffer ||
+        buffer == legacy_window_surface_buffer) {
+        return VBE_TARGET_SLOT_BYTES;
+    }
+    if (buffer == framebuffer || buffer == vbe_frontbuffer()) {
+        return (uint32_t)((uint32_t)mode_info->pitch * (uint32_t)mode_info->height);
+    }
+    return VBE_TARGET_SLOT_BYTES;
+}
+
 static void vbe_memcpy_fast(void* dest, const void* src, uint32_t count) {
     vbe_memcpy_local(dest, src, count);
 }
@@ -110,6 +138,76 @@ static void vbe_memset_fast(void* dest, uint32_t color, uint32_t count_bytes) {
     for (uint32_t i = 0; i < count; i++) {
         pixels[i] = color;
     }
+}
+
+static int load_embedded_logo(embedded_ppm_t* out) {
+    const uint8_t* start;
+    const uint8_t* end;
+    uint32_t width;
+    uint32_t height;
+    uint32_t expected_size;
+
+    if (!out) return 0;
+#if defined(__x86_64__)
+    start = _binary_obj_x86_64_assets_logo_rgb_start;
+    end = _binary_obj_x86_64_assets_logo_rgb_end;
+    width = 24U;
+    height = 24U;
+#else
+    start = _binary_obj_i386_assets_logo_rgb_start;
+    end = _binary_obj_i386_assets_logo_rgb_end;
+    width = 24U;
+    height = 24U;
+#endif
+    expected_size = width * height * 3U;
+    if (!start || !end || end <= start) return 0;
+    if ((uint32_t)(end - start) < expected_size) return 0;
+    out->pixels = start;
+    out->width = width;
+    out->height = height;
+    out->stride = width * 3U;
+    return 1;
+}
+
+static void vbe_draw_boot_logo(uint8_t* target) {
+    embedded_ppm_t image;
+    int base_x;
+    int base_y;
+
+    if (!target || !load_embedded_logo(&image)) return;
+    base_x = ((int)mode_info->width - (int)image.width) / 2;
+    base_y = ((int)mode_info->height - (int)image.height) / 2 - 32;
+    if (base_x < 0) base_x = 0;
+    if (base_y < 16) base_y = 16;
+
+    for (uint32_t y = 0; y < image.height; y++) {
+        const uint8_t* row = image.pixels + (size_t)y * image.stride;
+        for (uint32_t x = 0; x < image.width; x++) {
+            const uint8_t* px = row + (size_t)x * 3U;
+            uint32_t color = ((uint32_t)px[0] << 16) | ((uint32_t)px[1] << 8) | (uint32_t)px[2];
+            vbe_put_pixel_to(target, mode_info->width, base_x + (int)x, base_y + (int)y, color);
+        }
+    }
+}
+
+static void vbe_fill_boot_neutral_frame(uint8_t* target) {
+    uint32_t bpp_bytes;
+    uint32_t screen_size;
+
+    if (!target || mode_info->width == 0U || mode_info->height == 0U) return;
+    bpp_bytes = mode_info->bpp / 8U;
+    screen_size = mode_info->width * mode_info->height * bpp_bytes;
+    if (bpp_bytes == 4U) {
+        vbe_memset_fast(target, 0x0B1016U, screen_size);
+        vbe_draw_boot_logo(target);
+        return;
+    }
+    for (uint32_t y = 0; y < mode_info->height; y++) {
+        for (uint32_t x = 0; x < mode_info->width; x++) {
+            vbe_put_pixel_to(target, mode_info->width, (int)x, (int)y, 0x0B1016U);
+        }
+    }
+    vbe_draw_boot_logo(target);
 }
 
 static uint32_t vbe_get_pixel_from(uint8_t* buffer, uint32_t buf_width, int x, int y) {
@@ -137,13 +235,13 @@ static int load_embedded_bg(embedded_ppm_t* out) {
 #if defined(__x86_64__)
     start = _binary_obj_x86_64_assets_bg_rgb_start;
     end = _binary_obj_x86_64_assets_bg_rgb_end;
-    width = 400U;
-    height = 225U;
+    width = 160U;
+    height = 90U;
 #else
     start = _binary_obj_i386_assets_bg_rgb_start;
     end = _binary_obj_i386_assets_bg_rgb_end;
-    width = 200U;
-    height = 112U;
+    width = 160U;
+    height = 90U;
 #endif
     expected_size = width * height * 3U;
     if (!start || !end || end <= start) return 0;
@@ -261,24 +359,48 @@ static void vbe_alpha_blend_fast(void* dest, uint32_t color, uint32_t alpha, uin
     }
 }
 
+static int vbe_glyph_bit(const unsigned char* glyph, int row, int col) {
+    if (!glyph || row < 0 || row >= 8 || col < 0 || col >= UI_GLYPH_W) return 0;
+    return (glyph[row] & (1U << (7 - col))) != 0U;
+}
+
+static int vbe_glyph_alpha(const unsigned char* glyph, int row, int col) {
+    int direct = 0;
+    int diagonal = 0;
+
+    if (vbe_glyph_bit(glyph, row, col)) return 255;
+    for (int oy = -1; oy <= 1; oy++) {
+        for (int ox = -1; ox <= 1; ox++) {
+            if (ox == 0 && oy == 0) continue;
+            if (!vbe_glyph_bit(glyph, row + oy, col + ox)) continue;
+            if (ox == 0 || oy == 0) direct++;
+            else diagonal++;
+        }
+    }
+    if (direct == 0 && diagonal == 0) return 0;
+    return direct * 44 + diagonal * 20;
+}
+
 static void vbe_draw_glyph_solid_32(int x, int y, const unsigned char* glyph, uint32_t color) {
-    int start_col = 0;
-    int end_col = UI_GLYPH_W;
-    int start_row = 0;
-    int end_row = 8;
+    int start_col = -1;
+    int end_col = UI_GLYPH_W + 1;
+    int start_row = -1;
+    int end_row = 9;
 
     if (x < 0) start_col = -x;
     if (y < 0) start_row = -y;
     if (x + end_col > (int)current_target_width) end_col = (int)current_target_width - x;
-    if (y + end_row > (int)mode_info->height) end_row = (int)mode_info->height - y;
+    if (y + end_row > (int)current_target_height) end_row = (int)current_target_height - y;
     if (start_col >= end_col || start_row >= end_row) return;
 
     for (int row = start_row; row < end_row; row++) {
         uint32_t* dest = (uint32_t*)(current_target + ((y + row) * current_target_width + x + start_col) * 4U);
-        unsigned char bits = glyph[row];
         for (int col = start_col; col < end_col; col++) {
-            if ((bits & (1U << (7 - col))) != 0U) {
+            int alpha = vbe_glyph_alpha(glyph, row, col);
+            if (alpha >= 255) {
                 dest[col - start_col] = color;
+            } else if (alpha > 0) {
+                dest[col - start_col] = vbe_mix_color(color, dest[col - start_col], alpha);
             }
         }
     }
@@ -508,17 +630,40 @@ void init_vbe() {
     if (mode_info->framebuffer && mode_info->width != 0 && mode_info->height != 0 && mode_info->pitch != 0) {
         framebuffer_size = (size_t)mode_info->pitch * (size_t)mode_info->height;
         framebuffer = (uint8_t*)paging_map_physical((uintptr_t)mode_info->framebuffer, framebuffer_size,
-                                                    PAGING_FLAG_WRITE | PAGING_FLAG_CACHE_DISABLE);
+                                                    PAGING_FLAG_WRITE | PAGING_FLAG_WRITE_COMBINING);
     }
     current_target = backbuffer;
     current_target_width = mode_info->width;
-    vbe_draw_wallpaper();
+    current_target_height = mode_info->height;
+    vbe_fill_boot_neutral_frame(backbuffer);
     vbe_update();
 }
 
-void vbe_set_target(uint8_t* buffer, uint32_t width) {
+void vbe_set_target(uint8_t* buffer, uint32_t width, uint32_t height) {
+    uint32_t bpp_bytes;
+    uint32_t row_bytes;
+    uint32_t max_height;
+
     current_target = buffer;
     current_target_width = width;
+    current_target_height = height;
+    current_target_capacity = vbe_target_capacity_for(buffer);
+
+    bpp_bytes = mode_info->bpp / 8U;
+    if (current_target_capacity == 0U || current_target_width == 0U || bpp_bytes == 0U) {
+        current_target_width = 0U;
+        current_target_height = 0U;
+        return;
+    }
+
+    row_bytes = current_target_width * bpp_bytes;
+    if (row_bytes == 0U || row_bytes > current_target_capacity) {
+        current_target_width = 0U;
+        current_target_height = 0U;
+        return;
+    }
+    max_height = current_target_capacity / row_bytes;
+    if (current_target_height > max_height) current_target_height = max_height;
 }
 
 void vbe_put_pixel_to(uint8_t* buffer, uint32_t buf_width, int x, int y, uint32_t color) {
@@ -540,7 +685,7 @@ void vbe_put_pixel_to(uint8_t* buffer, uint32_t buf_width, int x, int y, uint32_
 }
 
 uint32_t vbe_get_pixel(int x, int y) {
-    if (x < 0 || (uint32_t)x >= current_target_width || y < 0 || (uint32_t)y >= mode_info->height) return 0;
+    if (x < 0 || (uint32_t)x >= current_target_width || y < 0 || (uint32_t)y >= current_target_height) return 0;
     uint32_t bpp_bytes = mode_info->bpp / 8;
     int offset = (y * current_target_width + x) * bpp_bytes;
     if (mode_info->bpp == 32) {
@@ -628,7 +773,7 @@ void vbe_draw_cursor(int x, int y) {
         int end_y = y + 12;
 
         if (end_x > (int)current_target_width) end_x = (int)current_target_width;
-        if (end_y > (int)mode_info->height) end_y = (int)mode_info->height;
+        if (end_y > (int)current_target_height) end_y = (int)current_target_height;
         if (start_x >= end_x || start_y >= end_y) return;
 
         for (int row = start_y; row < end_y; row++) {
@@ -653,7 +798,7 @@ void vbe_draw_cursor(int x, int y) {
 }
 
 void vbe_clear(uint32_t color) {
-    vbe_fill_rect(0, 0, mode_info->width, mode_info->height, color);
+    vbe_fill_rect(0, 0, (int)current_target_width, (int)current_target_height, color);
 }
 
 void vbe_draw_char_hd(int x, int y, char c, uint32_t color, int scale) {
@@ -665,7 +810,8 @@ void vbe_draw_char_hd(int x, int y, char c, uint32_t color, int scale) {
         }
         for (int row = 0; row < 8; row++) {
             for (int col = 0; col < UI_GLYPH_W; col++) {
-                if (glyph[row] & (1 << (7 - col))) vbe_put_pixel_alpha(x + col, y + row, color, 255);
+                int alpha = vbe_glyph_alpha(glyph, row, col);
+                if (alpha > 0) vbe_put_pixel_alpha(x + col, y + row, color, alpha);
             }
         }
         return;
@@ -699,7 +845,8 @@ static void vbe_draw_glyph_hd(int x, int y, uint16_t glyph_id, uint32_t color, i
         }
         for (int row = 0; row < 8; row++) {
             for (int col = 0; col < UI_GLYPH_W; col++) {
-                if (glyph[row] & (1 << (7 - col))) vbe_put_pixel_alpha(x + col, y + row, color, 255);
+                int alpha = vbe_glyph_alpha(glyph, row, col);
+                if (alpha > 0) vbe_put_pixel_alpha(x + col, y + row, color, alpha);
             }
         }
         return;
@@ -738,13 +885,16 @@ void vbe_render_mouse_direct(int x, int y) {
     uint8_t* frontbuffer = vbe_frontbuffer();
     uint8_t* old_target = current_target;
     uint32_t old_width = current_target_width;
+    uint32_t old_height = current_target_height;
 
     if (!frontbuffer) return;
     current_target = frontbuffer;
     current_target_width = mode_info->width;
+    current_target_height = mode_info->height;
     vbe_draw_cursor(x, y);
     current_target = old_target;
     current_target_width = old_width;
+    current_target_height = old_height;
 }
 void vbe_copy_to_buffer(void* source) {
     uint32_t size = mode_info->width * mode_info->height * (mode_info->bpp / 8);
@@ -759,7 +909,7 @@ void vbe_copy_to_buffer(void* source) {
 #define COLOR_TEXT         UI_TEXT
 #define COLOR_TEXT_DIM     UI_TEXT_MUTED
 #define WINDOW_CLIENT_INSET_X 1
-#define WINDOW_CLIENT_TOP 40
+#define WINDOW_CLIENT_TOP UI_WINDOW_CLIENT_TOP
 #define WINDOW_CLIENT_BOTTOM 8
 #define UI_GLYPH_W         7
 #define UI_GLYPH_ADVANCE   7
@@ -793,41 +943,18 @@ static int ui_explorer_sidebar_width(int client_w) {
     return 132;
 }
 
-static int ui_settings_compact_layout(int client_w) {
-    return client_w < 430;
-}
-
 static void ui_draw_modal(void) {
-    int sw = (int)mode_info->width;
-    int sh = (int)mode_info->height;
-    int w = 320;
-    int h = 140;
-    int x = (sw - w) / 2;
-    int y = (sh - h) / 2;
-    if (user_explorer_state.modal_mode == USER_EXPLORER_MODAL_NONE) return;
-    vbe_fill_rect_alpha(0, 0, sw, sh, 0x02060A, 110);
-    ui_draw_panel(x, y, w, h, UI_RADIUS_LG, UI_SURFACE_1, 250, UI_BORDER_STRONG, 255);
-    if (user_explorer_state.modal_mode == USER_EXPLORER_MODAL_RENAME) {
-        vbe_draw_string(x + 20, y + 20, "Rename Item", UI_TEXT);
-        vbe_draw_string(x + 20, y + 38, "Type a new name and press Enter.", UI_TEXT_MUTED);
-        vbe_fill_rect_alpha(x + 20, y + 60, w - 40, 28, UI_SURFACE_0, 255);
-        vbe_draw_rect(x + 20, y + 60, w - 40, 28, UI_BORDER_SOFT);
-        vbe_draw_string(x + 28, y + 69, user_explorer_state.modal_input, UI_TEXT);
-        ui_draw_chip(x + w - 136, y + h - 32, 50, 18, UI_SURFACE_2, UI_TEXT_MUTED, "Esc");
-        ui_draw_chip(x + w - 78, y + h - 32, 54, 18, UI_ACCENT_DEEP, UI_TEXT, "Enter");
-    } else if (user_explorer_state.modal_mode == USER_EXPLORER_MODAL_DELETE) {
-        vbe_draw_string(x + 20, y + 20, "Delete Item", UI_DANGER);
-        vbe_draw_string(x + 20, y + 42, "Delete the selected item?", UI_TEXT);
-        if (user_explorer_state.selected_idx >= 0 && dir_cache[user_explorer_state.selected_idx].flags != 0) {
-            vbe_draw_string(x + 20, y + 60, dir_cache[user_explorer_state.selected_idx].name, UI_TEXT_MUTED);
-        }
-        ui_draw_chip(x + w - 136, y + h - 32, 50, 18, UI_SURFACE_2, UI_TEXT_MUTED, "Esc");
-        ui_draw_chip(x + w - 78, y + h - 32, 54, 18, UI_DANGER, UI_TEXT, "Delete");
-    }
 }
 
 void vbe_get_window_client_rect(window_t* win, int* out_x, int* out_y, int* out_w, int* out_h) {
     if (!win) return;
+    if ((win->flags & GUI_WINDOW_FLAG_BORDERLESS) != 0U) {
+        if (out_x) *out_x = win->x;
+        if (out_y) *out_y = win->y;
+        if (out_w) *out_w = win->w;
+        if (out_h) *out_h = win->h;
+        return;
+    }
     if (out_x) *out_x = win->x + WINDOW_CLIENT_INSET_X;
     if (out_y) *out_y = win->y + WINDOW_CLIENT_TOP;
     if (out_w) *out_w = win->w - WINDOW_CLIENT_INSET_X * 2;
@@ -848,22 +975,75 @@ static void ui_copy_truncated(char* dst, const char* src, int max_chars) {
     dst[i] = '\0';
 }
 
-void vbe_blit_window(window_t* win, uint8_t* win_buf, int is_focused) {
-    if (!win->visible || win->minimized) return;
-    
-    int x = win->x;
-    int y = win->y;
-    int w = win->w;
-    int h = win->h;
+static void vbe_blit_window_client_surface(window_t* win, uint8_t* client_buf, uint32_t client_w, uint32_t client_h, uint32_t client_bpp, int is_focused) {
+    uint32_t bpp;
+    int x;
+    int y;
+    int w;
+    int h;
+    int client_x;
+    int client_y;
+    int client_width;
+    int client_height;
+    int screen_w;
+    int screen_h;
 
-    vbe_draw_shadow(x + 1, y + 2, w, h, UI_RADIUS_LG);
-    vbe_draw_rounded_rect(x, y, w, h, UI_RADIUS_LG, COLOR_GLASS_BG, 246);
-    vbe_draw_rounded_rect(x, y, w, h, UI_RADIUS_LG, UI_BORDER_STRONG, 220);
+    if (!win || !win->visible || win->minimized) return;
+    x = win->x;
+    y = win->y;
+    w = win->w;
+    h = win->h;
+    screen_w = mode_info->width;
+    screen_h = mode_info->height;
+    bpp = mode_info->bpp / 8;
 
-    uint32_t title_top = is_focused ? UI_SURFACE_3 : UI_SURFACE_2;
-    uint32_t title_bottom = is_focused ? UI_SURFACE_2 : UI_SURFACE_1;
-    vbe_fill_rect_gradient(x + 1, y + 1, w - 2, 38, title_top, title_bottom, 1);
-    vbe_fill_rect_alpha(x + 1, y + 38, w - 2, 1, is_focused ? UI_ACCENT : UI_BORDER_SOFT, 200);
+    if ((win->flags & GUI_WINDOW_FLAG_BORDERLESS) != 0U) {
+        if (!client_buf || client_w == 0U || client_h == 0U) return;
+        if ((int)client_w < w) w = (int)client_w;
+        if ((int)client_h < h) h = (int)client_h;
+        for (int row = 0; row < h; row++) {
+            int draw_y = y + row;
+            int copy_x = x;
+            int copy_w = w;
+            int src_x = 0;
+
+            if (draw_y < 0 || draw_y >= screen_h) continue;
+            if (copy_x < 0) {
+                src_x = -copy_x;
+                copy_w += copy_x;
+                copy_x = 0;
+            }
+            if (copy_x + copy_w > screen_w) copy_w = screen_w - copy_x;
+            if (copy_w <= 0) continue;
+
+            {
+                uint8_t* dest = backbuffer + (draw_y * screen_w + copy_x) * bpp;
+                uint8_t* src = client_buf + (((uint32_t)row * client_w) + (uint32_t)src_x) * client_bpp;
+                if (client_bpp == bpp) vbe_memcpy_fast(dest, src, (uint32_t)copy_w * bpp);
+                else if (client_bpp == 4U && bpp == 3U) {
+                    for (int col = 0; col < copy_w; col++) {
+                        uint32_t color = *(uint32_t*)(src + (uint32_t)col * 4U);
+                        dest[(uint32_t)col * 3U + 0U] = (uint8_t)(color & 0xFFU);
+                        dest[(uint32_t)col * 3U + 1U] = (uint8_t)((color >> 8) & 0xFFU);
+                        dest[(uint32_t)col * 3U + 2U] = (uint8_t)((color >> 16) & 0xFFU);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
+    vbe_draw_shadow(x + 1, y + 2, w, h, UI_RADIUS_MD);
+    vbe_draw_rounded_rect(x, y, w, h, UI_RADIUS_MD, COLOR_GLASS_BG, 246);
+    vbe_draw_rounded_rect(x, y, w, h, UI_RADIUS_MD, is_focused ? UI_BORDER_STRONG : UI_BORDER_SOFT, 230);
+
+    {
+        uint32_t title_top = is_focused ? UI_WINDOW_ACTIVE_TOP : UI_WINDOW_INACTIVE_TOP;
+        uint32_t title_bottom = is_focused ? UI_WINDOW_ACTIVE_BOTTOM : UI_WINDOW_INACTIVE_BOTTOM;
+        vbe_fill_rect_gradient(x + 1, y + 1, w - 2, WINDOW_CLIENT_TOP - 3, title_top, title_bottom, 1);
+        vbe_fill_rect_alpha(x + 1, y + WINDOW_CLIENT_TOP - 3, w - 2, 1,
+                            is_focused ? 0x173E5E : UI_BORDER_SOFT, 210);
+    }
     vbe_fill_rect_alpha(x + WINDOW_CLIENT_INSET_X, y + WINDOW_CLIENT_TOP,
                         w - WINDOW_CLIENT_INSET_X * 2, h - WINDOW_CLIENT_TOP - WINDOW_CLIENT_BOTTOM,
                         UI_SURFACE_0, 255);
@@ -874,12 +1054,201 @@ void vbe_blit_window(window_t* win, uint8_t* win_buf, int is_focused) {
         if (title_chars < 6) title_chars = 6;
         if (title_chars > 19) title_chars = 19;
         ui_copy_truncated(title_buf, win->title, title_chars);
-        vbe_draw_string(x + 18, y + 15, title_buf, COLOR_TEXT);
+        vbe_draw_string(x + 18, y + 10, title_buf, is_focused ? UI_TEXT : UI_TEXT_MUTED);
     }
 
-    vbe_draw_rounded_rect(x + w - 64, y + 14, 8, 8, 4, UI_SUCCESS, 200);
-    vbe_draw_rounded_rect(x + w - 46, y + 14, 8, 8, 4, UI_WARNING, 210);
-    vbe_draw_rounded_rect(x + w - 28, y + 14, 8, 8, 4, UI_DANGER, 225);
+    vbe_draw_rounded_rect(x + w - 58, y + 8, 12, 12, 3, is_focused ? 0xE3E8ED : 0x555E68, 235);
+    vbe_draw_rounded_rect(x + w - 40, y + 8, 12, 12, 3, is_focused ? 0xE3E8ED : 0x555E68, 235);
+    vbe_draw_rounded_rect(x + w - 22, y + 8, 12, 12, 3, is_focused ? 0xD2645F : 0x555E68, 235);
+    vbe_fill_rect_alpha(x + w - 18, y + h - 12, 8, 1, UI_TEXT_SUBTLE, 180);
+    vbe_fill_rect_alpha(x + w - 15, y + h - 9, 5, 1, UI_TEXT_SUBTLE, 180);
+    vbe_fill_rect_alpha(x + w - 12, y + h - 6, 2, 1, UI_TEXT_SUBTLE, 180);
+
+    if (!client_buf || client_w == 0U || client_h == 0U) return;
+
+    vbe_get_window_client_rect(win, &client_x, &client_y, &client_width, &client_height);
+    if (client_width <= 0 || client_height <= 0) return;
+    if ((uint32_t)client_width > client_w) client_width = (int)client_w;
+    if ((uint32_t)client_height > client_h) client_height = (int)client_h;
+
+    if (client_bpp == 0U) client_bpp = bpp;
+    for (int row = 0; row < client_height; row++) {
+        int draw_y = client_y + row;
+        int copy_x = client_x;
+        int copy_w = client_width;
+        int src_x = 0;
+
+        if (draw_y < 0 || draw_y >= screen_h) continue;
+        if (copy_x < 0) {
+            src_x = -copy_x;
+            copy_w += copy_x;
+            copy_x = 0;
+        }
+        if (copy_x + copy_w > screen_w) copy_w = screen_w - copy_x;
+        if (copy_w <= 0) continue;
+
+        {
+            uint8_t* dest = backbuffer + (draw_y * screen_w + copy_x) * bpp;
+            uint8_t* src = client_buf + (((uint32_t)row * client_w) + (uint32_t)src_x) * client_bpp;
+
+            if (client_bpp == bpp) {
+                vbe_memcpy_fast(dest, src, (uint32_t)copy_w * bpp);
+            } else if (client_bpp == 4U && bpp == 3U) {
+                for (int col = 0; col < copy_w; col++) {
+                    uint32_t color = *(uint32_t*)(src + (uint32_t)col * 4U);
+                    dest[(uint32_t)col * 3U + 0U] = (uint8_t)(color & 0xFFU);
+                    dest[(uint32_t)col * 3U + 1U] = (uint8_t)((color >> 8) & 0xFFU);
+                    dest[(uint32_t)col * 3U + 2U] = (uint8_t)((color >> 16) & 0xFFU);
+                }
+            } else if (client_bpp == 4U && bpp == 4U) {
+                for (int col = 0; col < copy_w; col++) {
+                    *(uint32_t*)(dest + (uint32_t)col * 4U) = *(uint32_t*)(src + (uint32_t)col * 4U);
+                }
+            } else {
+                int limit = copy_w;
+                for (int col = 0; col < limit; col++) {
+                    uint32_t color;
+                    if (client_bpp == 4U) color = *(uint32_t*)(src + (uint32_t)col * 4U);
+                    else color = ((uint32_t)src[(uint32_t)col * client_bpp + 2U] << 16) |
+                                 ((uint32_t)src[(uint32_t)col * client_bpp + 1U] << 8) |
+                                 (uint32_t)src[(uint32_t)col * client_bpp + 0U];
+
+                    if (bpp == 4U) {
+                        *(uint32_t*)(dest + (uint32_t)col * 4U) = color;
+                    } else if (bpp == 3U) {
+                        dest[(uint32_t)col * 3U + 0U] = (uint8_t)(color & 0xFFU);
+                        dest[(uint32_t)col * 3U + 1U] = (uint8_t)((color >> 8) & 0xFFU);
+                        dest[(uint32_t)col * 3U + 2U] = (uint8_t)((color >> 16) & 0xFFU);
+                    }
+                }
+            }
+        }
+    }
+}
+
+static void vbe_blit_borderless_region(window_t* win, uint8_t* client_buf, uint32_t client_w, uint32_t client_h,
+                                       uint32_t client_bpp, int clip_x, int clip_y, int clip_w, int clip_h) {
+    uint32_t bpp;
+    int x;
+    int y;
+    int w;
+    int h;
+    int start_x;
+    int start_y;
+    int end_x;
+    int end_y;
+    int draw_w;
+    int screen_w;
+    int screen_h;
+
+    if (!win || !client_buf || client_w == 0U || client_h == 0U || clip_w <= 0 || clip_h <= 0) return;
+    x = win->x;
+    y = win->y;
+    w = win->w;
+    h = win->h;
+    if ((int)client_w < w) w = (int)client_w;
+    if ((int)client_h < h) h = (int)client_h;
+    screen_w = (int)mode_info->width;
+    screen_h = (int)mode_info->height;
+    bpp = mode_info->bpp / 8U;
+    if (client_bpp == 0U) client_bpp = bpp;
+
+    start_x = clip_x > x ? clip_x : x;
+    start_y = clip_y > y ? clip_y : y;
+    end_x = clip_x + clip_w < x + w ? clip_x + clip_w : x + w;
+    end_y = clip_y + clip_h < y + h ? clip_y + clip_h : y + h;
+    if (start_x < 0) start_x = 0;
+    if (start_y < 0) start_y = 0;
+    if (end_x > screen_w) end_x = screen_w;
+    if (end_y > screen_h) end_y = screen_h;
+    if (start_x >= end_x || start_y >= end_y) return;
+
+    draw_w = end_x - start_x;
+    for (int row = start_y; row < end_y; row++) {
+        int src_y = row - y;
+        int src_x = start_x - x;
+        uint8_t* dest = backbuffer + ((row * screen_w) + start_x) * bpp;
+        uint8_t* src = client_buf + (((uint32_t)src_y * client_w) + (uint32_t)src_x) * client_bpp;
+
+        if (client_bpp == bpp) {
+            vbe_memcpy_fast(dest, src, (uint32_t)draw_w * bpp);
+        } else if (client_bpp == 4U && bpp == 3U) {
+            for (int col = 0; col < draw_w; col++) {
+                uint32_t color = *(uint32_t*)(src + (uint32_t)col * 4U);
+                dest[(uint32_t)col * 3U + 0U] = (uint8_t)(color & 0xFFU);
+                dest[(uint32_t)col * 3U + 1U] = (uint8_t)((color >> 8) & 0xFFU);
+                dest[(uint32_t)col * 3U + 2U] = (uint8_t)((color >> 16) & 0xFFU);
+            }
+        }
+    }
+}
+
+static void vbe_blit_raw_surface(int x, int y, int w, int h, uint8_t* src_buf) {
+    uint32_t bpp;
+    int screen_w;
+    int screen_h;
+
+    if (!src_buf || w <= 0 || h <= 0) return;
+    bpp = mode_info->bpp / 8U;
+    screen_w = (int)mode_info->width;
+    screen_h = (int)mode_info->height;
+
+    for (int row = 0; row < h; row++) {
+        int draw_y = y + row;
+        int copy_x = x;
+        int copy_w = w;
+        int src_x = 0;
+
+        if (draw_y < 0 || draw_y >= screen_h) continue;
+        if (copy_x < 0) {
+            src_x = -copy_x;
+            copy_w += copy_x;
+            copy_x = 0;
+        }
+        if (copy_x + copy_w > screen_w) copy_w = screen_w - copy_x;
+        if (copy_w <= 0) continue;
+
+        {
+            uint8_t* dest = backbuffer + (draw_y * screen_w + copy_x) * bpp;
+            uint8_t* src = src_buf + ((row * w) + src_x) * (int)bpp;
+            vbe_memcpy_fast(dest, src, (uint32_t)copy_w * bpp);
+        }
+    }
+}
+
+void vbe_blit_window(window_t* win, uint8_t* win_buf, int is_focused) {
+    if (!win->visible || win->minimized) return;
+    
+    int x = win->x;
+    int y = win->y;
+    int w = win->w;
+    int h = win->h;
+
+    vbe_draw_shadow(x + 1, y + 2, w, h, UI_RADIUS_MD);
+    vbe_draw_rounded_rect(x, y, w, h, UI_RADIUS_MD, COLOR_GLASS_BG, 246);
+    vbe_draw_rounded_rect(x, y, w, h, UI_RADIUS_MD, is_focused ? UI_BORDER_STRONG : UI_BORDER_SOFT, 230);
+
+    uint32_t title_top = is_focused ? UI_WINDOW_ACTIVE_TOP : UI_WINDOW_INACTIVE_TOP;
+    uint32_t title_bottom = is_focused ? UI_WINDOW_ACTIVE_BOTTOM : UI_WINDOW_INACTIVE_BOTTOM;
+    vbe_fill_rect_gradient(x + 1, y + 1, w - 2, WINDOW_CLIENT_TOP - 3, title_top, title_bottom, 1);
+    vbe_fill_rect_alpha(x + 1, y + WINDOW_CLIENT_TOP - 3, w - 2, 1,
+                        is_focused ? 0x173E5E : UI_BORDER_SOFT, 210);
+    vbe_fill_rect_alpha(x + WINDOW_CLIENT_INSET_X, y + WINDOW_CLIENT_TOP,
+                        w - WINDOW_CLIENT_INSET_X * 2, h - WINDOW_CLIENT_TOP - WINDOW_CLIENT_BOTTOM,
+                        UI_SURFACE_0, 255);
+
+    {
+        char title_buf[20];
+        int title_chars = (w - 96) / 8;
+        if (title_chars < 6) title_chars = 6;
+        if (title_chars > 19) title_chars = 19;
+        ui_copy_truncated(title_buf, win->title, title_chars);
+        vbe_draw_string(x + 18, y + 10, title_buf, is_focused ? UI_TEXT : UI_TEXT_MUTED);
+    }
+
+    vbe_draw_rounded_rect(x + w - 58, y + 8, 12, 12, 3, is_focused ? 0xE3E8ED : 0x555E68, 235);
+    vbe_draw_rounded_rect(x + w - 40, y + 8, 12, 12, 3, is_focused ? 0xE3E8ED : 0x555E68, 235);
+    vbe_draw_rounded_rect(x + w - 22, y + 8, 12, 12, 3, is_focused ? 0xD2645F : 0x555E68, 235);
     vbe_fill_rect_alpha(x + w - 18, y + h - 12, 8, 1, UI_TEXT_SUBTLE, 180);
     vbe_fill_rect_alpha(x + w - 15, y + h - 9, 5, 1, UI_TEXT_SUBTLE, 180);
     vbe_fill_rect_alpha(x + w - 12, y + h - 6, 2, 1, UI_TEXT_SUBTLE, 180);
@@ -931,13 +1300,20 @@ void vbe_blit_rect(int x, int y, int w, int h, uint8_t* src_buf, uint32_t src_st
 }
 
 void vbe_fill_rect(int x, int y, int w, int h, uint32_t color) {
+    uint32_t bpp;
+    uint64_t row_stride;
+
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > (int)current_target_width) w = current_target_width - x;
-    if (y + h > (int)mode_info->height) h = mode_info->height - y;
+    if (y + h > (int)current_target_height) h = (int)current_target_height - y;
     if (w <= 0 || h <= 0) return;
 
-    uint32_t bpp = mode_info->bpp / 8;
+    bpp = mode_info->bpp / 8U;
+    row_stride = (uint64_t)current_target_width * (uint64_t)bpp;
+    if (current_target_capacity == 0U || row_stride == 0ULL || row_stride > current_target_capacity) return;
+    if ((((uint64_t)y * row_stride) + ((uint64_t)x * (uint64_t)bpp)) >= current_target_capacity) return;
+
     for (int i = 0; i < h; i++) {
         uint8_t* p = current_target + ((y + i) * current_target_width + x) * bpp;
         if (bpp == 4) {
@@ -959,7 +1335,7 @@ void vbe_fill_rect_alpha(int x, int y, int w, int h, uint32_t color, int alpha) 
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > (int)current_target_width) w = current_target_width - x;
-    if (y + h > (int)mode_info->height) h = mode_info->height - y;
+    if (y + h > (int)current_target_height) h = (int)current_target_height - y;
     if (w <= 0 || h <= 0) return;
 
     uint32_t bpp = mode_info->bpp / 8;
@@ -1183,7 +1559,7 @@ void vbe_fill_rect_gradient(int x, int y, int w, int h, uint32_t c1, uint32_t c2
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > (int)current_target_width) w = current_target_width - x;
-    if (y + h > (int)mode_info->height) h = mode_info->height - y;
+    if (y + h > (int)current_target_height) h = (int)current_target_height - y;
     if (w <= 0 || h <= 0) return;
 
     if (mode_info->bpp == 32) {
@@ -1363,7 +1739,7 @@ void vbe_draw_explorer_content(int x, int y, int w, int h, int current_dir) {
     int content_h = panel_h;
     int visible_rows = ui_explorer_visible_rows(panel_h);
     int max_scroll = item_count > visible_rows ? item_count - visible_rows : 0;
-    int start_row;
+    int start_row = 0;
     int sidebar_chip_w = sidebar_w - 24;
     char selected_buf[28];
 
@@ -1376,20 +1752,13 @@ void vbe_draw_explorer_content(int x, int y, int w, int h, int current_dir) {
     vbe_draw_string(x + 16, panel_y + 146, "Items", UI_TEXT_SUBTLE);
     vbe_draw_int(x + 66, panel_y + 146, item_count, UI_ACCENT_ALT);
     vbe_draw_string(x + 16, panel_y + panel_h - 44, "Status", UI_TEXT_SUBTLE);
-    if (user_explorer_state.selected_idx >= 0 && dir_cache[user_explorer_state.selected_idx].flags != 0) {
-        ui_copy_truncated(selected_buf, dir_cache[user_explorer_state.selected_idx].name, compact ? 11 : 15);
-        vbe_draw_string(x + 16, panel_y + panel_h - 28, selected_buf, UI_TEXT);
-    } else {
-        vbe_draw_string(x + 16, panel_y + panel_h - 28, "No selection", UI_TEXT_MUTED);
-    }
+    vbe_draw_string(x + 16, panel_y + panel_h - 28, "No selection", UI_TEXT_MUTED);
 
     ui_draw_panel_flat(content_x, panel_y, content_w, panel_h, UI_RADIUS_MD, UI_SURFACE_1, 235, UI_BORDER_SOFT, 255);
     vbe_draw_string(content_x + 14, panel_y + 16, "Directory", UI_TEXT);
     vbe_draw_string(content_x + content_w - (compact ? 38 : 72), panel_y + 16, compact ? "Sync" : "Refresh", UI_TEXT_SUBTLE);
     vbe_fill_rect_alpha(content_x + 12, panel_y + 30, content_w - 24, 1, UI_BORDER_SOFT, 255);
-    if (user_explorer_state.list_scroll < 0) user_explorer_state.list_scroll = 0;
-    if (user_explorer_state.list_scroll > max_scroll) user_explorer_state.list_scroll = max_scroll;
-    start_row = user_explorer_state.list_scroll;
+    (void)max_scroll;
     if (item_count == 0) {
         ui_draw_panel_flat(content_x + 16, list_y + 28, content_w - 32, 96, UI_RADIUS_MD, UI_SURFACE_0, 255, UI_BORDER_SOFT, 255);
         vbe_draw_vector_folder(content_x + 34, list_y + 52, 0);
@@ -1404,17 +1773,19 @@ void vbe_draw_explorer_content(int x, int y, int w, int h, int current_dir) {
         return;
     }
 
-    int row = 0;
-    int matched_row = 0;
-    for (int i = 0; i < MAX_FILES; i++) {
-        if (dir_cache[i].flags != 0 && dir_cache[i].parent_index == current_dir) {
-            if (matched_row >= start_row && row < visible_rows) {
-                ui_draw_list_card(content_x + 16, list_y + row * 54, content_w - 32, 44,
-                                  dir_cache[i].flags, dir_cache[i].name, (int)dir_cache[i].size, user_explorer_state.selected_idx == i);
-                row++;
+    {
+        int row = 0;
+        int matched_row = 0;
+        for (int i = 0; i < MAX_FILES; i++) {
+            if (dir_cache[i].flags != 0 && dir_cache[i].parent_index == current_dir) {
+                if (matched_row >= start_row && row < visible_rows) {
+                    ui_draw_list_card(content_x + 16, list_y + row * 54, content_w - 32, 44,
+                                      dir_cache[i].flags, dir_cache[i].name, (int)dir_cache[i].size, 0);
+                    row++;
+                }
+                matched_row++;
+                if (row >= visible_rows) break;
             }
-            matched_row++;
-            if (row >= visible_rows) break;
         }
     }
 
@@ -1427,10 +1798,7 @@ void vbe_draw_explorer_content(int x, int y, int w, int h, int current_dir) {
         vbe_draw_string(content_x + 150, panel_y + content_h - 22, "/", UI_TEXT_SUBTLE);
         vbe_draw_int(content_x + 160, panel_y + content_h - 22, max_scroll + 1, UI_TEXT_MUTED);
     }
-    if (content_w > 220 && user_explorer_state.selected_idx >= 0 && dir_cache[user_explorer_state.selected_idx].flags != 0) {
-        ui_copy_truncated(selected_buf, dir_cache[user_explorer_state.selected_idx].name, compact ? 10 : 15);
-        vbe_draw_string(content_x + content_w - (compact ? 84 : 132), panel_y + content_h - 22, selected_buf, UI_TEXT);
-    }
+    (void)selected_buf;
 }
 void vbe_draw_desktop_icons(int desktop_dir) {
     vbe_draw_icon(20, 60, 2, "This PC", 0);
@@ -1511,9 +1879,8 @@ void vbe_draw_narcpad(int x, int y, int w, int h, const char* title, const char*
     }
     if (current_len > 0) last_line_len = current_len;
     max_top_line = total_lines > visible_lines ? total_lines - visible_lines : 0;
-    if (user_narcpad_state.view_scroll < 0) user_narcpad_state.view_scroll = max_top_line;
-    if (user_narcpad_state.view_scroll > max_top_line) user_narcpad_state.view_scroll = max_top_line;
-    top_line = user_narcpad_state.view_scroll;
+    (void)max_top_line;
+    top_line = 0;
 
     for (render = content; render && *render; render++) {
         if (*render == '\n' || char_idx >= chars_per_line) {
@@ -1593,157 +1960,89 @@ void vbe_draw_snake_game(int x, int y, int w, int h, int* px, int* py, int len, 
         }
     }
 }
-void vbe_compose_scene(window_t* windows, int win_count, int active_win_idx, int start_vis, int desktop_dir, int drag_file_idx, int mx, int my, int ctx_vis, int ctx_x, int ctx_y, const char** ctx_items, int ctx_count, int ctx_sel) {
+static void vbe_compose_scene_impl(window_t* windows, int win_count, int active_win_idx, int start_vis, int desktop_dir,
+                                   int drag_file_idx, int mx, int my, int ctx_vis, int ctx_x, int ctx_y,
+                                   const char** ctx_items, int ctx_count, int ctx_sel,
+                                   int use_region, int dirty_x, int dirty_y, int dirty_w, int dirty_h) {
     uint32_t bpp_bytes = mode_info->bpp / 8;
     uint32_t size = mode_info->width * mode_info->height * bpp_bytes;
-    vbe_memcpy_fast(composition_buffer, wallpaper_buffer, size);
+    int desktop_surface_active = nwm_desktop_surface_active_state();
+    int desktop_owner_pid = nwm_get_desktop_owner_pid();
+
+    if (!desktop_surface_active) {
+        if (bpp_bytes == 4U) vbe_memset_fast(composition_buffer, 0x0B1016U, size);
+        else vbe_fill_boot_neutral_frame(composition_buffer);
+    }
     
     uint8_t* old_target = current_target;
     uint32_t old_width = current_target_width;
-    vbe_set_target(composition_buffer, mode_info->width);
-    vbe_draw_desktop_icons(desktop_dir);
+    uint32_t old_height = current_target_height;
+    (void)start_vis;
+    (void)desktop_dir;
+    (void)drag_file_idx;
+    (void)mx;
+    (void)my;
+    (void)ctx_vis;
+    (void)ctx_x;
+    (void)ctx_y;
+    (void)ctx_items;
+    (void)ctx_count;
+    (void)ctx_sel;
+    vbe_set_target(composition_buffer, mode_info->width, mode_info->height);
 
     uint8_t* old_back = backbuffer;
     backbuffer = composition_buffer;
 
     for (int i = 0; i < win_count; i++) {
+        uint8_t* client_surface;
+        uint32_t client_surface_w;
+        uint32_t client_surface_h;
+        int is_desktop_surface;
         if (!windows[i].visible || windows[i].minimized) continue;
+
+        is_desktop_surface = windows[i].type == WIN_TYPE_USER &&
+                             windows[i].owner_pid == desktop_owner_pid &&
+                             (windows[i].flags & GUI_WINDOW_FLAG_BORDERLESS) != 0U &&
+                             (windows[i].flags & GUI_WINDOW_FLAG_FULLSCREEN) != 0U;
+        if (desktop_surface_active && !is_desktop_surface) continue;
         
         int is_focused = (i == active_win_idx);
-        
-        switch(windows[i].type) {
-            case WIN_TYPE_TERMINAL:
-                if (vga_window_needs_refresh()) vga_refresh_window();
-                vbe_blit_window(&windows[i], window_buffer, is_focused);
-                break;
-            case WIN_TYPE_EXPLORER:
-                vbe_blit_window(&windows[i], NULL, is_focused);
-                {
-                    int cx, cy, cw, ch;
-                    vbe_get_window_client_rect(&windows[i], &cx, &cy, &cw, &ch);
-                    vbe_draw_breadcrumb(cx, cy, cw, user_explorer_state.current_dir);
-                    vbe_draw_explorer_content(cx, cy + 36, cw, ch - 36, user_explorer_state.current_dir);
-                }
-                break;
-            case WIN_TYPE_NARCPAD:
-                vbe_blit_window(&windows[i], NULL, is_focused);
-                {
-                    int cx, cy, cw, ch;
-                    vbe_get_window_client_rect(&windows[i], &cx, &cy, &cw, &ch);
-                    vbe_draw_narcpad(cx, cy, cw, ch, windows[i].title, user_narcpad_state.content);
-                }
-                break;
-            case WIN_TYPE_SNAKE:
-                vbe_blit_window(&windows[i], NULL, is_focused);
-                {
-                    int cx, cy, cw, ch;
-                    vbe_get_window_client_rect(&windows[i], &cx, &cy, &cw, &ch);
-                if (user_snake_running()) {
-                    vbe_draw_snake_game(cx, cy, cw, ch,
-                                        user_snake_state.px, user_snake_state.py,
-                                        user_snake_state.len, user_snake_state.apple_x,
-                                        user_snake_state.apple_y, user_snake_state.dead,
-                                        user_snake_state.score, user_snake_state.best);
-                } else {
-                    extern int snk_px[100], snk_py[100], snk_len, apple_x, apple_y, snk_dead, snk_score, snk_best;
-                    vbe_draw_snake_game(cx, cy, cw, ch, snk_px, snk_py, snk_len, apple_x, apple_y, snk_dead, snk_score, snk_best);
-                }
-                }
-                break;
-            case WIN_TYPE_SETTINGS:
-                vbe_blit_window(&windows[i], NULL, is_focused);
-                {
-                    int cx, cy, cw, ch;
-                    char time_str[9];
-                    char date_str[11];
-                    char tz_str[16];
-                    int offset = rtc_get_timezone_offset_minutes();
-                    int compact;
-                    vbe_get_window_client_rect(&windows[i], &cx, &cy, &cw, &ch);
-                    rtc_format_timezone(tz_str, sizeof(tz_str));
-                    compact = ui_settings_compact_layout(cw);
+        if (windows[i].type == WIN_TYPE_TERMINAL) {
+            if (vga_window_needs_refresh()) vga_refresh_window();
+            (void)is_focused;
+            vbe_blit_raw_surface(windows[i].x, windows[i].y, windows[i].w, windows[i].h, window_buffer);
+            continue;
+        }
 
-                    time_str[0] = (char)('0' + (get_hour() / 10));
-                    time_str[1] = (char)('0' + (get_hour() % 10));
-                    time_str[2] = ':';
-                    time_str[3] = (char)('0' + (get_minute() / 10));
-                    time_str[4] = (char)('0' + (get_minute() % 10));
-                    time_str[5] = ':';
-                    time_str[6] = (char)('0' + (get_second() / 10));
-                    time_str[7] = (char)('0' + (get_second() % 10));
-                    time_str[8] = '\0';
-
-                    date_str[0] = '2';
-                    date_str[1] = '0';
-                    date_str[2] = (char)('0' + ((get_year() / 10) % 10));
-                    date_str[3] = (char)('0' + (get_year() % 10));
-                    date_str[4] = '-';
-                    date_str[5] = (char)('0' + (get_month() / 10));
-                    date_str[6] = (char)('0' + (get_month() % 10));
-                    date_str[7] = '-';
-                    date_str[8] = (char)('0' + (get_day() / 10));
-                    date_str[9] = (char)('0' + (get_day() % 10));
-                    date_str[10] = '\0';
-
-                    vbe_fill_rect_alpha(cx, cy, cw, ch, UI_SURFACE_1, 255);
-                    vbe_draw_string(cx + 16, cy + 16, "Time", UI_TEXT);
-                    vbe_draw_string(cx + 16, cy + 34, "System settings", UI_TEXT_SUBTLE);
-                    vbe_fill_rect_alpha(cx + 16, cy + 48, cw - 32, 1, UI_BORDER_SOFT, 255);
-
-                    vbe_draw_string(cx + 20, cy + 66, "Local Time", UI_TEXT_SUBTLE);
-                    vbe_draw_string_hd(cx + 20, cy + 86, time_str, UI_TEXT, 2);
-                    if (!compact) {
-                        vbe_draw_string(cx + cw - 160, cy + 70, "Date", UI_TEXT_SUBTLE);
-                        vbe_draw_string(cx + cw - 160, cy + 88, date_str, UI_TEXT);
-                        vbe_draw_string(cx + cw - 160, cy + 106, tz_str, UI_ACCENT_ALT);
-                    } else {
-                        vbe_draw_string(cx + 20, cy + 118, date_str, UI_TEXT);
-                        vbe_draw_string(cx + 108, cy + 118, tz_str, UI_ACCENT_ALT);
-                    }
-
-                    vbe_fill_rect_alpha(cx + 16, cy + 130, cw - 32, 1, UI_BORDER_SOFT, 255);
-                    vbe_draw_string(cx + 20, cy + 148, "Timezone", UI_TEXT);
-                    ui_draw_chip(cx + 20, cy + 170, 92, 22, UI_ACCENT_DEEP, UI_TEXT, tz_str);
-                    if (!compact) {
-                        ui_draw_chip(cx + 124, cy + 170, 56, 22, UI_SURFACE_2, UI_TEXT, "-30m");
-                        ui_draw_chip(cx + 188, cy + 170, 56, 22, UI_SURFACE_2, UI_TEXT, "+30m");
-                    } else {
-                        ui_draw_chip(cx + 20, cy + 198, 56, 22, UI_SURFACE_2, UI_TEXT, "-30m");
-                        ui_draw_chip(cx + 84, cy + 198, 56, 22, UI_SURFACE_2, UI_TEXT, "+30m");
-                    }
-
-                    vbe_draw_string(cx + 20, cy + (compact ? 226 : 206), "Presets", UI_TEXT_SUBTLE);
-                    ui_draw_chip(cx + 20, cy + (compact ? 246 : 226), 64, 22, offset == -300 ? UI_ACCENT_DEEP : UI_SURFACE_2, UI_TEXT, "UTC-5");
-                    ui_draw_chip(cx + 92, cy + (compact ? 246 : 226), 44, 22, offset == 0 ? UI_ACCENT_DEEP : UI_SURFACE_2, UI_TEXT, "UTC");
-                    ui_draw_chip(cx + 144, cy + (compact ? 246 : 226), 64, 22, offset == 180 ? UI_ACCENT_DEEP : UI_SURFACE_2, UI_TEXT, "UTC+3");
-                    if (!compact) {
-                        ui_draw_chip(cx + 216, cy + 226, 92, 22, offset == 330 ? UI_ACCENT_DEEP : UI_SURFACE_2, UI_TEXT, "UTC+5:30");
-                        ui_draw_chip(cx + 316, cy + 226, 64, 22, offset == 540 ? UI_ACCENT_DEEP : UI_SURFACE_2, UI_TEXT, "UTC+9");
-                    } else {
-                        ui_draw_chip(cx + 20, cy + 274, 92, 22, offset == 330 ? UI_ACCENT_DEEP : UI_SURFACE_2, UI_TEXT, "UTC+5:30");
-                        ui_draw_chip(cx + 120, cy + 274, 64, 22, offset == 540 ? UI_ACCENT_DEEP : UI_SURFACE_2, UI_TEXT, "UTC+9");
-                    }
-
-                    vbe_draw_string(cx + 20, cy + (compact ? 306 : 262), "Offset", UI_TEXT_SUBTLE);
-                    vbe_draw_int(cx + 72, cy + (compact ? 306 : 262), offset, UI_ACCENT_ALT);
-                    vbe_draw_string(cx + 112, cy + (compact ? 306 : 262), "min", UI_TEXT_MUTED);
-                }
-                break;
+        client_surface_w = 0;
+        client_surface_h = 0;
+        client_surface = windows[i].client_surface;
+        client_surface_w = windows[i].client_surface_w;
+        client_surface_h = windows[i].client_surface_h;
+        if (use_region && desktop_surface_active &&
+            (windows[i].flags & GUI_WINDOW_FLAG_BORDERLESS) != 0U) {
+            vbe_blit_borderless_region(&windows[i], client_surface, client_surface_w, client_surface_h,
+                                       windows[i].client_surface_bpp, dirty_x, dirty_y, dirty_w, dirty_h);
+        } else {
+            vbe_blit_window_client_surface(&windows[i], client_surface, client_surface_w, client_surface_h,
+                                           windows[i].client_surface_bpp, is_focused);
         }
     }
-    
-    if (drag_file_idx != -1) {
-        vbe_draw_icon(mx - 16, my - 16, 1, "Moving...", 1);
-    }
-
-    vbe_draw_taskbar(start_vis);
-    if (start_vis) vbe_draw_start_menu();
-    if (ctx_vis) vbe_draw_context_menu(ctx_x, ctx_y, ctx_items, ctx_count, ctx_sel);
-    ui_draw_modal();
-    vbe_draw_clock();
+    if (!use_region) ui_draw_modal();
     
     backbuffer = old_back;
-    vbe_set_target(old_target, old_width);
+    vbe_set_target(old_target, old_width, old_height);
+}
+
+void vbe_compose_scene(window_t* windows, int win_count, int active_win_idx, int start_vis, int desktop_dir, int drag_file_idx, int mx, int my, int ctx_vis, int ctx_x, int ctx_y, const char** ctx_items, int ctx_count, int ctx_sel) {
+    vbe_compose_scene_impl(windows, win_count, active_win_idx, start_vis, desktop_dir, drag_file_idx,
+                           mx, my, ctx_vis, ctx_x, ctx_y, ctx_items, ctx_count, ctx_sel, 0, 0, 0, 0, 0);
+}
+
+void vbe_compose_scene_region(window_t* windows, int win_count, int active_win_idx, int start_vis, int desktop_dir, int drag_file_idx, int mx, int my, int ctx_vis, int ctx_x, int ctx_y, const char** ctx_items, int ctx_count, int ctx_sel, int dirty_x, int dirty_y, int dirty_w, int dirty_h) {
+    vbe_compose_scene_impl(windows, win_count, active_win_idx, start_vis, desktop_dir, drag_file_idx,
+                           mx, my, ctx_vis, ctx_x, ctx_y, ctx_items, ctx_count, ctx_sel,
+                           1, dirty_x, dirty_y, dirty_w, dirty_h);
 }
 
 void vbe_prepare_frame_from_composition() {
@@ -1757,10 +2056,10 @@ void vbe_present_cursor_fast(int old_x, int old_y, int new_x, int new_y) {
     int min_y = old_y < new_y ? old_y : new_y;
     int max_x = old_x > new_x ? old_x : new_x;
     int max_y = old_y > new_y ? old_y : new_y;
-    int rect_x = min_x - 1;
-    int rect_y = min_y - 1;
-    int rect_w = (max_x - min_x) + 14;
-    int rect_h = (max_y - min_y) + 14;
+    int rect_x = min_x - 2;
+    int rect_y = min_y - 2;
+    int rect_w = (max_x - min_x) + 18;
+    int rect_h = (max_y - min_y) + 18;
 
     if (rect_x < 0) {
         rect_w += rect_x;
@@ -1774,24 +2073,8 @@ void vbe_present_cursor_fast(int old_x, int old_y, int new_x, int new_y) {
     if (rect_y + rect_h > (int)mode_info->height) rect_h = mode_info->height - rect_y;
     if (rect_w <= 0 || rect_h <= 0) return;
 
-    {
-        uint32_t bpp = mode_info->bpp / 8;
-        for (int row = 0; row < rect_h; row++) {
-            uint8_t* dest = backbuffer + ((rect_y + row) * mode_info->width + rect_x) * bpp;
-            uint8_t* src = composition_buffer + ((rect_y + row) * mode_info->width + rect_x) * bpp;
-            vbe_memcpy_fast(dest, src, rect_w * bpp);
-        }
-    }
-
-    {
-        uint8_t* old_target = current_target;
-        uint32_t old_width = current_target_width;
-        vbe_set_target(backbuffer, mode_info->width);
-        vbe_draw_cursor(new_x, new_y);
-        vbe_set_target(old_target, old_width);
-    }
-
-    vbe_blit_rect(rect_x, rect_y, rect_w, rect_h, backbuffer, mode_info->width);
+    vbe_present_composition_region(rect_x, rect_y, rect_w, rect_h);
+    vbe_render_mouse_direct(new_x, new_y);
 }
 
 void vbe_draw_context_menu(int x, int y, const char** items, int count, int selected_idx) {

@@ -1,5 +1,6 @@
 #include "x64_paging.h"
 
+#include "cpu.h"
 #include "x64_serial.h"
 
 extern uint8_t __user_region_start[];
@@ -34,7 +35,7 @@ typedef struct x64_heap_block {
 #define X64_VM_WINDOW_PT_COUNT      (X64_VM_WINDOW_SIZE / X64_LARGE_PAGE_SIZE)
 #define X64_HEAP_PT_COUNT           (X64_HEAP_SIZE / X64_LARGE_PAGE_SIZE)
 #define X64_USER_WINDOW_BASE        0x0000000040000000ULL
-#define X64_USER_WINDOW_SIZE        0x0000000000800000ULL
+#define X64_USER_WINDOW_SIZE        0x0000000004000000ULL
 #define X64_USER_WINDOW_PT_COUNT    (X64_USER_WINDOW_SIZE / X64_LARGE_PAGE_SIZE)
 #define X64_USER_WINDOW_PAGE_COUNT  (X64_USER_WINDOW_SIZE / X64_PAGE_SIZE)
 #define X64_IDENTITY_PDPT_COUNT     4U
@@ -44,6 +45,7 @@ typedef struct x64_heap_block {
 #define X64_PAGING_PWT              0x008ULL
 #define X64_PAGING_PCD              0x010ULL
 #define X64_PAGING_PS               0x080ULL
+#define X64_PAGING_PAT_4K           0x080ULL
 
 #define X64_E820_COUNT_PTR ((uint16_t*)0x5000)
 #define X64_E820_DATA_PTR  ((uint8_t*)0x5002)
@@ -85,8 +87,15 @@ static void x64_load_page_root(uint64_t* root) {
 }
 
 static uint64_t x64_allowed_pte_flags(uint64_t flags) {
-    return flags & (X64_PAGING_FLAG_WRITE | X64_PAGING_FLAG_USER |
-                    X64_PAGING_FLAG_WRITE_THROUGH | X64_PAGING_FLAG_CACHE_DISABLE);
+    uint64_t pte_flags = flags & (X64_PAGING_FLAG_WRITE | X64_PAGING_FLAG_USER |
+                                  X64_PAGING_FLAG_WRITE_THROUGH | X64_PAGING_FLAG_CACHE_DISABLE);
+
+    if ((flags & X64_PAGING_FLAG_WRITE_COMBINING) != 0ULL) {
+        pte_flags &= ~(X64_PAGING_FLAG_WRITE_THROUGH | X64_PAGING_FLAG_CACHE_DISABLE);
+        if (cpu_pat_wc_enabled()) pte_flags |= X64_PAGING_PAT_4K | X64_PAGING_FLAG_WRITE_THROUGH;
+        else pte_flags |= X64_PAGING_FLAG_CACHE_DISABLE;
+    }
+    return pte_flags;
 }
 
 static int x64_vm_slot_used(uint64_t slot) {

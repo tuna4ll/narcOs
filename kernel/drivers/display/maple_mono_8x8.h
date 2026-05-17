@@ -5,7 +5,18 @@
  * Rasterized from Maple Mono Normal NL Regular v7.9.
  * Source license: SIL Open Font License 1.1.
  */
-static unsigned char vbe_font[256][8] = {
+#ifndef MAPLE_MONO_8X8_SYMBOL
+#define MAPLE_MONO_8X8_SYMBOL vbe_font
+#endif
+
+#ifndef MAPLE_MONO_8X8_STORAGE
+#define MAPLE_MONO_8X8_STORAGE const unsigned char
+#endif
+
+#if defined(MAPLE_MONO_8X8_DECLARE_ONLY)
+extern const unsigned char MAPLE_MONO_8X8_SYMBOL[256][8];
+#else
+MAPLE_MONO_8X8_STORAGE MAPLE_MONO_8X8_SYMBOL[256][8] = {
     [32] = {0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
     [33] = {0x00, 0x20, 0x20, 0x20, 0x20, 0x00, 0x00, 0x20},
     [34] = {0x00, 0x50, 0x50, 0x50, 0x00, 0x00, 0x00, 0x00},
@@ -102,5 +113,10 @@ static unsigned char vbe_font[256][8] = {
     [125] = {0xE0, 0x20, 0x20, 0x20, 0x30, 0x20, 0x20, 0x20},
     [126] = {0x00, 0x00, 0x00, 0x00, 0x68, 0x58, 0x00, 0x00},
 };
+
+#endif
+
+#undef MAPLE_MONO_8X8_STORAGE
+#undef MAPLE_MONO_8X8_SYMBOL
 
 #endif

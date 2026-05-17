@@ -4,7 +4,6 @@
 #include "usermode.h"
 #include "user_abi.h"
 #include "user_net_apps.h"
-#include "user_tls.h"
 
 #define USER_CODE __attribute__((section(".user_code")))
 #define USER_RODATA __attribute__((section(".user_rodata")))
@@ -175,89 +174,11 @@ int USER_CODE user_http_fetch_text(const char* host, const char* path,
 int USER_CODE user_https_fetch_text(const char* host, const char* path,
                                     char* response, uint16_t response_cap,
                                     net_http_result_t* out_result) {
-    char request[512];
-    char discard[128];
-    uint16_t request_len = 0;
-    uint16_t response_off = 0;
-    uint32_t server_ip = 0;
-    uint32_t started;
-    uint32_t last_progress;
-    int status = NET_OK;
-
-    if (!host || !path || !response || response_cap < 2U || !out_result) return NET_ERR_INVALID;
-
-    memset(out_result, 0, sizeof(*out_result));
-    response[0] = '\0';
-
-    if (user_net_resolve(host, &server_ip) != NET_OK) return NET_ERR_RESOLVE;
-    out_result->resolved_ip = server_ip;
-
-    status = user_build_http_get_request(host, path, request, sizeof(request), &request_len);
-    if (status != NET_OK) return status;
-
-    status = user_tls_open(host);
-    if (status != NET_OK) return status;
-
-    status = user_tls_send(request, request_len);
-    if (status < 0) {
-        (void)user_tls_close();
-        return status;
-    }
-    if ((uint16_t)status != request_len) {
-        (void)user_tls_close();
-        return NET_ERR_IO;
-    }
-
-    started = user_uptime_ticks();
-    last_progress = started;
-
-    while ((user_uptime_ticks() - started) <= USER_HTTP_TOTAL_TIMEOUT) {
-        int capacity = (int)(response_cap - 1U - response_off);
-        void* target_buf = response + response_off;
-        uint32_t to_read = capacity > 0 ? (uint32_t)capacity : (uint32_t)sizeof(discard);
-        int got;
-
-        if (capacity <= 0) {
-            target_buf = discard;
-            out_result->truncated = 1U;
-        }
-
-        got = user_tls_recv(target_buf, to_read);
-        if (got == NET_ERR_CLOSED) {
-            out_result->complete = 1U;
-            break;
-        }
-        if (got < 0) {
-            if (response_off == 0U) {
-                (void)user_tls_close();
-                return got;
-            }
-            break;
-        }
-        if (got > 0) {
-            if (target_buf == (void*)(response + response_off)) {
-                response_off = (uint16_t)(response_off + (uint16_t)got);
-            } else {
-                out_result->truncated = 1U;
-            }
-            last_progress = user_uptime_ticks();
-            continue;
-        }
-
-        if (user_uptime_ticks() > last_progress + USER_HTTP_IDLE_TIMEOUT) break;
-        user_yield();
-    }
-
-    user_http_finalize_response(response, response_off, out_result);
-    status = user_tls_close();
-    if (status < 0 &&
-        status != NET_ERR_TIMEOUT &&
-        status != NET_ERR_CLOSED &&
-        status != USER_TLS_ERR_ALERT &&
-        response_off == 0U) {
-        return status;
-    }
-    return response_off != 0U ? NET_OK : NET_ERR_TIMEOUT;
+    (void)host;
+    (void)path;
+    if (response && response_cap != 0U) response[0] = '\0';
+    if (out_result) memset(out_result, 0, sizeof(*out_result));
+    return NET_ERR_UNSUPPORTED;
 }
 
 uint32_t USER_CODE user_http_find_body(const char* response, uint32_t length) {
