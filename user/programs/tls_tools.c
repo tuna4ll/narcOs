@@ -22,11 +22,11 @@ static int tls_tools_https_main(int argc, char** argv) {
     int status;
 
     if (argc < 2 || prog_join_args(argc, argv, 1, args, sizeof(args)) != 0) {
-        userlib_print_error("Usage: https https://<pinned-host>/<path>");
+        userlib_print_error("Usage: https https://<host>/<path>");
         return 1;
     }
     if (prog_parse_http_target(args, host, sizeof(host), path, sizeof(path)) != 0) {
-        userlib_print_error("Usage: https https://<pinned-host>/<path>");
+        userlib_print_error("Usage: https https://<host>/<path>");
         return 1;
     }
 
@@ -73,13 +73,13 @@ static int tls_tools_fetch_main(int argc, char** argv) {
 
     if (argc < 3 || prog_join_args(argc, argv, 1, args, sizeof(args)) != 0) {
         userlib_print_error("Usage: fetch <host> [path] <output-file>");
-        userlib_print_error("   or: fetch https://<pinned-host>/<path> <output-file>");
+        userlib_print_error("   or: fetch https://<host>/<path> <output-file>");
         return 1;
     }
     if (prog_parse_fetch_args(args, host, sizeof(host), path, sizeof(path),
                               output_path, sizeof(output_path), &use_https) != 0) {
         userlib_print_error("Usage: fetch <host> [path] <output-file>");
-        userlib_print_error("   or: fetch https://<pinned-host>/<path> <output-file>");
+        userlib_print_error("   or: fetch https://<host>/<path> <output-file>");
         return 1;
     }
 

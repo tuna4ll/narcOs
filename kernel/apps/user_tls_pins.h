@@ -5,7 +5,7 @@
 #include "user_tls_crypto.h"
 
 typedef struct {
-    const char* host;
+    char host[32];
     uint8_t spki_sha256[USER_TLS_SHA256_DIGEST_SIZE];
 } user_tls_pin_entry_t;
 

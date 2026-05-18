@@ -1202,8 +1202,13 @@ static USER_CODE int user_tls_process_certificate(user_tls_client_t* client,
             if (user_tls_x509_spki_sha256(&client->server_cert, spki_hash) != 0) {
                 return USER_TLS_ERR_CERTIFICATE;
             }
-            if (user_tls_pins_match_host(client->server_name, spki_hash) != 0) {
-                return user_tls_debug_fail(USER_TLS_DEBUG_STAGE_CERTIFICATE, USER_TLS_ERR_PIN, "pin mismatch");
+            if (user_tls_pins_lookup(client->server_name, (const user_tls_pin_entry_t**)0) == 0) {
+                if (user_tls_pins_match_host(client->server_name, spki_hash) != 0) {
+                    return user_tls_debug_fail(USER_TLS_DEBUG_STAGE_CERTIFICATE, USER_TLS_ERR_PIN, "pin mismatch");
+                }
+                user_tls_debug_note(USER_TLS_DEBUG_STAGE_CERTIFICATE, "cert+pin ok");
+            } else {
+                user_tls_debug_note(USER_TLS_DEBUG_STAGE_CERTIFICATE, "cert ok");
             }
             saw_leaf = 1;
         }
@@ -1581,10 +1586,6 @@ int USER_CODE user_tls_open(const char* host) {
     user_tls_debug_reset();
     if (!host || host[0] == '\0') {
         return user_tls_debug_fail(USER_TLS_DEBUG_STAGE_OPEN, NET_ERR_INVALID, "invalid host");
-    }
-    user_tls_debug_note(USER_TLS_DEBUG_STAGE_OPEN, "pin lookup");
-    if (user_tls_pins_lookup(host, (const user_tls_pin_entry_t**)0) != 0) {
-        return user_tls_debug_fail(USER_TLS_DEBUG_STAGE_OPEN, USER_TLS_ERR_PIN, "host not pinned");
     }
     user_tls_debug_note(USER_TLS_DEBUG_STAGE_OPEN, "ntp time");
     if (user_tls_get_utc_unix_time(&unix_seconds) != NET_OK) {

@@ -49,7 +49,7 @@ static int core_help_main(void) {
         "  ping    - Ping an IPv4 host",
         "  ntp     - Query UTC time from an NTP server",
         "  http    - Fetch HTTP/1.0 response (http <host> [path])",
-        "  https   - Fetch HTTPS response (https https://pinned-host/path)",
+        "  https   - Fetch HTTPS response (https https://host/path)",
         "  netdemo - Run Ring 3 HTTP demo (netdemo <host> [path])",
         "  fetch   - Download HTTP/HTTPS body to a file",
         "  tls_test - Run TLS userland self-tests",

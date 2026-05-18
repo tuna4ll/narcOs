@@ -6,12 +6,6 @@
 
 #include "user_string.h"
 
-static const char user_tls_pin_host_test[] USER_RODATA = "test.example.com";
-static const char user_tls_pin_host_api[] USER_RODATA = "api.test.example.com";
-static const char user_tls_pin_host_edge[] USER_RODATA = "edge.svc.example.com";
-static const char user_tls_pin_host_python_com[] USER_RODATA = "www.python.com";
-static const char user_tls_pin_host_python[] USER_RODATA = "www.python.org";
-
 static const uint8_t user_tls_pin_hash_test[USER_TLS_SHA256_DIGEST_SIZE] USER_RODATA = {
     0x66, 0x0e, 0x21, 0xc0, 0x5c, 0x1d, 0xdb, 0x0b,
     0x67, 0x56, 0x51, 0xce, 0x3d, 0xbf, 0xb6, 0xc1,
@@ -20,27 +14,27 @@ static const uint8_t user_tls_pin_hash_test[USER_TLS_SHA256_DIGEST_SIZE] USER_RO
 };
 
 static const user_tls_pin_entry_t user_tls_pin_table[] USER_RODATA = {
-    { user_tls_pin_host_test,
+    { "test.example.com",
       { 0x66, 0x0e, 0x21, 0xc0, 0x5c, 0x1d, 0xdb, 0x0b,
         0x67, 0x56, 0x51, 0xce, 0x3d, 0xbf, 0xb6, 0xc1,
         0x8d, 0xcf, 0x52, 0xd3, 0x3f, 0x3a, 0x04, 0x50,
         0x62, 0x91, 0x1a, 0xd0, 0xf3, 0x9a, 0x78, 0xfc } },
-    { user_tls_pin_host_api,
+    { "api.test.example.com",
       { 0x66, 0x0e, 0x21, 0xc0, 0x5c, 0x1d, 0xdb, 0x0b,
         0x67, 0x56, 0x51, 0xce, 0x3d, 0xbf, 0xb6, 0xc1,
         0x8d, 0xcf, 0x52, 0xd3, 0x3f, 0x3a, 0x04, 0x50,
         0x62, 0x91, 0x1a, 0xd0, 0xf3, 0x9a, 0x78, 0xfc } },
-    { user_tls_pin_host_edge,
+    { "edge.svc.example.com",
       { 0x66, 0x0e, 0x21, 0xc0, 0x5c, 0x1d, 0xdb, 0x0b,
         0x67, 0x56, 0x51, 0xce, 0x3d, 0xbf, 0xb6, 0xc1,
         0x8d, 0xcf, 0x52, 0xd3, 0x3f, 0x3a, 0x04, 0x50,
         0x62, 0x91, 0x1a, 0xd0, 0xf3, 0x9a, 0x78, 0xfc } },
-    { user_tls_pin_host_python_com,
+    { "www.python.com",
       { 0x48, 0x96, 0x60, 0x52, 0x5e, 0xfd, 0xe4, 0xcf,
         0xcd, 0x46, 0x5a, 0x80, 0xcf, 0xd0, 0x39, 0xe2,
         0xd9, 0x0e, 0xc4, 0xff, 0xcc, 0x5a, 0xc5, 0x86,
         0x14, 0x86, 0xcb, 0xa8, 0x4e, 0xbc, 0x6d, 0xa7 } },
-    { user_tls_pin_host_python,
+    { "www.python.org",
       { 0x01, 0xe6, 0x90, 0x70, 0xbd, 0xff, 0xa7, 0xde,
         0x1f, 0xa2, 0x0b, 0x87, 0x59, 0x30, 0x7c, 0x7b,
         0x31, 0x3d, 0x41, 0x62, 0xfa, 0x3c, 0x3e, 0x90,
@@ -111,19 +105,19 @@ int USER_CODE user_tls_pins_selftest(char* detail, uint32_t detail_len) {
     if (!detail || detail_len == 0U) return -1;
     detail[0] = '\0';
 
-    if (user_tls_pins_lookup(user_tls_pin_host_test, &entry) != 0 || !entry) {
+    if (user_tls_pins_lookup("test.example.com", &entry) != 0 || !entry) {
         user_tls_pins_copy_detail(detail, detail_len, user_tls_pins_selftest_lookup_fail);
         return -1;
     }
-    if (user_tls_pins_match_host(user_tls_pin_host_api, user_tls_pin_hash_test) != 0 ||
-        user_tls_pins_match_host(user_tls_pin_host_edge, user_tls_pin_hash_test) != 0) {
+    if (user_tls_pins_match_host("api.test.example.com", user_tls_pin_hash_test) != 0 ||
+        user_tls_pins_match_host("edge.svc.example.com", user_tls_pin_hash_test) != 0) {
         user_tls_pins_copy_detail(detail, detail_len, user_tls_pins_selftest_match_fail);
         return -1;
     }
 
     user_memcpy(wrong_hash, user_tls_pin_hash_test, sizeof(wrong_hash));
     wrong_hash[0] ^= 0x5aU;
-    if (user_tls_pins_match_host(user_tls_pin_host_test, wrong_hash) == 0 ||
+    if (user_tls_pins_match_host("test.example.com", wrong_hash) == 0 ||
         user_tls_pins_lookup("missing.example.com", &entry) == 0) {
         user_tls_pins_copy_detail(detail, detail_len, user_tls_pins_selftest_reject_fail);
         return -1;
