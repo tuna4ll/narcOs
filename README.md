@@ -3,6 +3,7 @@
 # NarcOs
 
 A simple hobby operating system. It can run as `i386` or `x86_64`.
+<img width="1899" height="871" alt="image (60)" src="https://github.com/user-attachments/assets/73aa791e-1930-4a9a-a202-c2465ecc7ce9" />
 
 ## Requirements
 
