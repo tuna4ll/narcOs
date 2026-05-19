@@ -21,9 +21,9 @@ USER_PROGRAMS = hello ps cat echo kill proc_test pipe_test credits neofetch desk
 USER_EMBED_PROGRAMS = $(filter-out doom,$(USER_PROGRAMS))
 USER_PROGRAM_HEADERS = $(shell find $(USER_DIR)/programs -name '*.h' 2>/dev/null)
 DOOM1_WAD = $(wildcard $(DOOM_PORT_DIR)/doom1.wad)
-DOOM_BIN_LBA = 32768
+DOOM_BIN_LBA = 20480
 DOOM_BIN_MAX_SIZE = 1048576
-DOOM1_WAD_LBA = 33792
+DOOM1_WAD_LBA = 22528
 DOOM1_WAD_MAX_SIZE = 4489216
 DOOM1_WAD_SIZE = $(if $(DOOM1_WAD),$(shell wc -c < $(DOOM1_WAD)),0)
 DOOM1_WAD_CFLAGS = $(if $(DOOM1_WAD),-DNARCOS_DISK_DOOM1_WAD=1 -DNARCOS_DISK_DOOM1_WAD_LBA=$(DOOM1_WAD_LBA) -DNARCOS_DISK_DOOM1_WAD_SIZE=$(DOOM1_WAD_SIZE),)
@@ -104,6 +104,8 @@ I386_BOOT_MANIFEST_BIN = $(I386_OBJ_DIR)/boot/manifest.bin
 I386_KERNEL_ELF = $(I386_OBJ_DIR)/kernel.elf
 I386_KERNEL_BIN = $(I386_OBJ_DIR)/kernel.bin
 I386_IMAGE = $(I386_OBJ_DIR)/minios.img
+I386_ISO_ROOT = $(I386_OBJ_DIR)/iso
+I386_ISO = $(I386_OBJ_DIR)/narcos-i386.iso
 
 X86_64_OBJ_DIR = $(OBJ_DIR)/x86_64
 X86_64_CFLAGS = -m64 $(COMMON_CFLAGS) -I$(KERN_DIR)/arch/x86_64 $(KERNEL_INCLUDE_FLAGS) -mno-red-zone -mgeneral-regs-only -mno-mmx -mno-sse -mno-sse2 -msoft-float -O2 -fomit-frame-pointer
@@ -164,12 +166,14 @@ X86_64_BOOT_BIN = $(X86_64_OBJ_DIR)/boot/boot.bin
 X86_64_STAGE2_BIN = $(X86_64_OBJ_DIR)/boot/stage2.bin
 X86_64_BOOT_MANIFEST_BIN = $(X86_64_OBJ_DIR)/boot/manifest.bin
 X86_64_IMAGE = $(X86_64_OBJ_DIR)/minios64.img
+X86_64_ISO_ROOT = $(X86_64_OBJ_DIR)/iso
+X86_64_ISO = $(X86_64_OBJ_DIR)/narcos-x86_64.iso
 
 # Windows (MinGW) 'ld -o raw_binary_file' seklinde tam duz ciktivermeyebilir
 # Buna objcopy destek cikar (Fakat biz PE-O yapisindan objcopy cekecegiz)
 # Eger minios.img boyutu sacmalarsa LDFLAGS uzerinden --oformat binary zorlanabilir.
 
-.PHONY: all all-i386 all-x86_64 clean export-i386-artifacts pre-build run-i386 run-net run-net-i386 run-x86_64 run-x86_64-gui run-x86_64-headless run-x86_64-net user-programs user-programs-i386 user-programs-x86_64
+.PHONY: all all-i386 all-x86_64 clean export-i386-artifacts iso iso-i386 iso-x86_64 pre-build run-i386 run-iso-i386 run-iso-x86_64 run-net run-net-i386 run-x86_64 run-x86_64-gui run-x86_64-headless run-x86_64-net user-programs user-programs-i386 user-programs-x86_64
 .SECONDARY: $(I386_USER_BINARIES) $(X86_64_USER_BINARIES) $(I386_KERNEL_ELF) $(X86_64_KERNEL_ELF)
 
 all: all-i386 export-i386-artifacts
@@ -177,6 +181,12 @@ all: all-i386 export-i386-artifacts
 all-i386: pre-build $(I386_IMAGE)
 
 all-x86_64: pre-build $(X86_64_IMAGE)
+
+iso: iso-i386
+
+iso-i386: pre-build $(I386_ISO)
+
+iso-x86_64: pre-build $(X86_64_ISO)
 
 user-programs: user-programs-i386
 
@@ -200,7 +210,7 @@ $(I386_BOOT_BIN): $(BOOT_DIR)/boot.asm $(I386_STAGE2_BIN)
 	@mkdir -p $(dir $@)
 	$(eval STAGE2_SECS := $(shell echo $$(( ($$(wc -c < $(I386_STAGE2_BIN)) + 511) / 512 ))))
 	@test $(STAGE2_SECS) -le 16 || (echo "[ERR] i386 stage2 too large for manifest layout: $(STAGE2_SECS) sectors > 16" && exit 1)
-	$(AS) -DSTAGE2_SECTORS=$(STAGE2_SECS) -f bin $< -o $@
+	$(AS) -DSTAGE2_SECTORS=$(STAGE2_SECS) -DDISK_IMAGE_SECTORS=$(DISK_IMAGE_SECTORS) -f bin $< -o $@
 
 $(I386_STAGE2_BIN): $(BOOT_DIR)/stage2.asm $(I386_KERNEL_ELF)
 	@mkdir -p $(dir $@)
@@ -320,6 +330,15 @@ $(I386_IMAGE): $(I386_BOOT_BIN) $(I386_STAGE2_BIN) $(I386_BOOT_MANIFEST_BIN) $(I
 	$(if $(DOOM1_WAD),dd if=$(DOOM1_WAD) of=$@ bs=512 seek=$(DOOM1_WAD_LBA) conv=notrunc 2>/dev/null,)
 	@echo "[OK] i386 image: $@"
 
+$(I386_ISO): $(I386_IMAGE)
+	@command -v genisoimage >/dev/null 2>&1 || (echo "[ERR] genisoimage is required to build ISO images" && exit 1)
+	@rm -rf $(I386_ISO_ROOT)
+	@mkdir -p $(I386_ISO_ROOT)/boot
+	cp $(I386_IMAGE) $(I386_ISO_ROOT)/boot/minios.img
+	printf "NarcOs i386 bootable ISO\nBoot image: /boot/minios.img\n" > $(I386_ISO_ROOT)/README.TXT
+	genisoimage -quiet -V NARCOS_I386 -b boot/minios.img -c boot/boot.cat -hard-disk-boot -o $@ $(I386_ISO_ROOT)
+	@echo "[OK] i386 ISO: $@"
+
 $(X86_64_OBJ_DIR)/%.o: $(KERN_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(X86_64_CFLAGS) -c $< -o $@
@@ -422,7 +441,7 @@ $(X86_64_BOOT_BIN): $(BOOT_DIR)/boot.asm $(X86_64_STAGE2_BIN)
 	@mkdir -p $(dir $@)
 	$(eval STAGE2_SECS := $(shell echo $$(( ($$(wc -c < $(X86_64_STAGE2_BIN)) + 511) / 512 ))))
 	@test $(STAGE2_SECS) -le 16 || (echo "[ERR] x86_64 stage2 too large for manifest layout: $(STAGE2_SECS) sectors > 16" && exit 1)
-	$(AS) -DSTAGE2_SECTORS=$(STAGE2_SECS) -f bin $< -o $@
+	$(AS) -DSTAGE2_SECTORS=$(STAGE2_SECS) -DDISK_IMAGE_SECTORS=$(DISK_IMAGE_SECTORS) -f bin $< -o $@
 
 $(X86_64_BOOT_MANIFEST_BIN): $(X86_64_KERNEL_ELF)
 	@mkdir -p $(dir $@)
@@ -442,11 +461,23 @@ $(X86_64_IMAGE): $(X86_64_BOOT_BIN) $(X86_64_STAGE2_BIN) $(X86_64_BOOT_MANIFEST_
 	$(if $(DOOM1_WAD),dd if=$(DOOM1_WAD) of=$@ bs=512 seek=$(DOOM1_WAD_LBA) conv=notrunc 2>/dev/null,)
 	@echo "[OK] x86_64 image: $@"
 
+$(X86_64_ISO): $(X86_64_IMAGE)
+	@command -v genisoimage >/dev/null 2>&1 || (echo "[ERR] genisoimage is required to build ISO images" && exit 1)
+	@rm -rf $(X86_64_ISO_ROOT)
+	@mkdir -p $(X86_64_ISO_ROOT)/boot
+	cp $(X86_64_IMAGE) $(X86_64_ISO_ROOT)/boot/minios64.img
+	printf "NarcOs x86_64 bootable ISO\nBoot image: /boot/minios64.img\n" > $(X86_64_ISO_ROOT)/README.TXT
+	genisoimage -quiet -V NARCOS_X86_64 -b boot/minios64.img -c boot/boot.cat -hard-disk-boot -o $@ $(X86_64_ISO_ROOT)
+	@echo "[OK] x86_64 ISO: $@"
+
 clean:
 	rm -rf $(OBJ_DIR) $(BOOT_DIR)/*.bin *.img kernel.bin kernel.elf kernel64.elf kernel64.bin kernel.tmp
 
 run-i386: all-i386
 	qemu-system-i386 -m 128M -drive format=raw,file=$(I386_IMAGE) -serial stdio -no-reboot -no-shutdown
+
+run-iso-i386: iso-i386
+	qemu-system-i386 -m 128M -cdrom $(I386_ISO) -boot d -serial stdio -no-reboot -no-shutdown
 
 run-net-i386: all-i386
 	qemu-system-i386 -m 128M -drive format=raw,file=$(I386_IMAGE) -serial stdio -netdev user,id=n0 -device rtl8139,netdev=n0 -no-reboot -no-shutdown
@@ -457,6 +488,9 @@ run-x86_64: run-x86_64-headless
 
 run-x86_64-headless: all-x86_64
 	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -display none -no-reboot -no-shutdown
+
+run-iso-x86_64: iso-x86_64
+	qemu-system-x86_64 -m 128M -cdrom $(X86_64_ISO) -boot d -serial stdio -display none -no-reboot -no-shutdown
 
 run-x86_64-gui: all-x86_64
 	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -no-reboot -no-shutdown

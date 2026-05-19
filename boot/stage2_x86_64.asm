@@ -52,6 +52,7 @@ EFER_LME        equ 0x00000100
 stage2_main:
     mov [boot_drive], dl
     call serial_init16
+    call get_drive_geometry
     mov si, msg_s2
     call print16
     call boot_menu
@@ -861,6 +862,69 @@ add_zero_range:
     pop di
     ret
 
+get_drive_geometry:
+    push ax
+    push cx
+    push dx
+    mov ah, 0x08
+    mov dl, [boot_drive]
+    int 0x13
+    jc .done
+    and cl, 0x3F
+    jz .done
+    mov [disk_spt], cl
+    inc dh
+    jz .done
+    mov [disk_heads], dh
+.done:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+disk_read_chs_current:
+    push ax
+    push bx
+    push cx
+    push dx
+    push es
+    mov eax, [dap_lba_lo]
+    test eax, 0xFFFF0000
+    jnz .err
+    xor dx, dx
+    movzx bx, byte [disk_spt]
+    div bx
+    inc dx
+    mov cl, dl
+    xor dx, dx
+    movzx bx, byte [disk_heads]
+    div bx
+    cmp ax, 1023
+    ja .err
+    mov dh, dl
+    mov ch, al
+    shr ax, 2
+    and al, 0xC0
+    or cl, al
+    mov bx, [dap_segment]
+    mov es, bx
+    mov bx, [dap_offset]
+    mov ax, 0x0201
+    mov dl, [boot_drive]
+    int 0x13
+    jc .err
+    clc
+    jmp .done
+.err:
+    stc
+.done:
+    pop es
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 disk_read_sectors:
     mov [dap_lba_lo], eax
     mov dword [dap_lba_hi], 0
@@ -882,11 +946,14 @@ disk_read_sectors:
     int 0x13
     jnc .ok
     dec byte [disk_retry]
-    jz .err
+    jz .try_chs
     mov ah, 0x00
     mov dl, [boot_drive]
     int 0x13
     jmp .retry
+.try_chs:
+    call disk_read_chs_current
+    jc .err
 .ok:
     inc dword [dap_lba_lo]
     add dword [read_dst], 512
@@ -918,6 +985,8 @@ dap_lba_hi:
     dd 0
 sectors_left  dw KERNEL_SECTORS
 disk_retry    db 3
+disk_spt      db 18
+disk_heads    db 2
 read_dst      dd 0
 ph_remaining dw 0
 boot_manifest_version dw 0

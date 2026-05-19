@@ -26,6 +26,13 @@ Run with networking:
 make run-net-i386
 ```
 
+Build and boot the 32-bit ISO:
+
+```bash
+make iso-i386
+make run-iso-i386
+```
+
 ## Run 64-bit
 
 ```bash
@@ -36,6 +43,13 @@ Run with networking:
 
 ```bash
 make run-x86_64-net
+```
+
+Build and boot the 64-bit ISO:
+
+```bash
+make iso-x86_64
+make run-iso-x86_64
 ```
 
 ## Clean

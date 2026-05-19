@@ -1303,7 +1303,16 @@ static USER_CODE int shell_run_external_segment(const char* segment, int wait_fo
     argv_ptrs[0] = argv_storage[0];
     pid = user_spawn(resolved, argv_ptrs, (uint32_t)argc);
     if (pid < 0) {
-        shell_print_error("error: spawn failed.");
+        char line[180];
+        int off = 0;
+        const char* prefix = "error: spawn failed for ";
+        const char* p = prefix;
+
+        while (*p && off + 1 < (int)sizeof(line)) line[off++] = *p++;
+        p = resolved;
+        while (*p && off + 1 < (int)sizeof(line)) line[off++] = *p++;
+        line[off] = '\0';
+        shell_print_error(line);
         return -1;
     }
     if (out_pid) *out_pid = pid;

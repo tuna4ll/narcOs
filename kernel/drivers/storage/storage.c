@@ -152,8 +152,7 @@ static int storage_backend_read_sector(storage_backend_t backend, uint32_t lba, 
         return ahci_read_sector(lba, buffer);
     }
     if (backend == STORAGE_BACKEND_ATA_PIO) {
-        ata_read_sector(lba, buffer);
-        return 0;
+        return ata_read_sector(lba, buffer);
     }
     return -1;
 }
@@ -165,8 +164,7 @@ static int storage_backend_write_sector(storage_backend_t backend, uint32_t lba,
         return ahci_write_sector(lba, buffer);
     }
     if (backend == STORAGE_BACKEND_ATA_PIO) {
-        ata_write_sector(lba, (uint8_t*)buffer);
-        return 0;
+        return ata_write_sector(lba, buffer);
     }
     return -1;
 }
@@ -321,6 +319,12 @@ static int storage_scan_partitions(storage_backend_t backend) {
 static int storage_select_volume_for_backend(storage_backend_t backend) {
     storage_active_scheme = STORAGE_PARTITION_SCHEME_NONE;
     storage_volume_base = 0;
+
+    if (storage_probe_narcos_volume(backend, 0)) {
+        storage_scan_partitions(backend);
+        return 1;
+    }
+
     (void)storage_scan_partitions(backend);
 
     for (int i = 0; i < storage_partition_total; i++) {
@@ -332,12 +336,13 @@ static int storage_select_volume_for_backend(storage_backend_t backend) {
         }
     }
 
-    return storage_probe_narcos_volume(backend, 0);
+    return 0;
 }
 
 static void storage_log_backend_selection(void) {
     serial_write("[storage] backend=");
-    serial_write(storage_backend == STORAGE_BACKEND_AHCI ? "ahci" : "ata-pio");
+    serial_write(storage_backend == STORAGE_BACKEND_AHCI ? "ahci" :
+                 (storage_backend == STORAGE_BACKEND_ATA_PIO ? "ata-pio" : "none"));
     serial_write(" volume_base=");
     serial_write_hex32(storage_effective_volume_base());
     serial_write(" scheme=");
@@ -379,19 +384,26 @@ void storage_init(void) {
     serial_write_line("[storage] init");
 
 #if UINTPTR_MAX > 0xFFFFFFFFU
-    /* The current x86_64 boot path always uses the raw disk image layout.
-       Skip partition probing until the long-mode storage path is stabilized. */
-    storage_backend = STORAGE_BACKEND_ATA_PIO;
-    storage_clear_partitions();
-    storage_active_scheme = STORAGE_PARTITION_SCHEME_NONE;
-    storage_volume_base = 0;
-    serial_write_line("[storage] x86_64 raw ATA mode");
+    if (ata_init() == 0) {
+        storage_backend = STORAGE_BACKEND_ATA_PIO;
+        (void)storage_select_volume_for_backend(STORAGE_BACKEND_ATA_PIO);
+    } else {
+        storage_backend = STORAGE_BACKEND_NONE;
+        storage_clear_partitions();
+        storage_active_scheme = STORAGE_PARTITION_SCHEME_NONE;
+        storage_volume_base = 0;
+        serial_write_line("[storage] x86_64 no legacy ATA/ATAPI device");
+    }
     storage_log_backend_selection();
     return;
 #endif
 
-    storage_backend = STORAGE_BACKEND_ATA_PIO;
-    (void)storage_select_volume_for_backend(STORAGE_BACKEND_ATA_PIO);
+    if (ata_init() == 0) {
+        storage_backend = STORAGE_BACKEND_ATA_PIO;
+        (void)storage_select_volume_for_backend(STORAGE_BACKEND_ATA_PIO);
+    } else {
+        storage_backend = STORAGE_BACKEND_NONE;
+    }
 
     if (ahci_init() == 0) {
         if (storage_select_volume_for_backend(STORAGE_BACKEND_AHCI)) {
@@ -401,6 +413,15 @@ void storage_init(void) {
         }
 
         serial_write_line("[storage] ahci disk skipped (unknown filesystem layout)");
+    }
+
+    if (storage_backend != STORAGE_BACKEND_ATA_PIO && ata_init() != 0) {
+        storage_backend = STORAGE_BACKEND_NONE;
+        storage_clear_partitions();
+        storage_active_scheme = STORAGE_PARTITION_SCHEME_NONE;
+        storage_volume_base = 0;
+        serial_write_line("[storage] no legacy ATA/ATAPI device");
+        return;
     }
 
     storage_backend = STORAGE_BACKEND_ATA_PIO;

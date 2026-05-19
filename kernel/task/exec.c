@@ -3,6 +3,49 @@
 #include "serial.h"
 #include "string.h"
 
+extern void vga_print(const char* str);
+extern void vga_print_color(const char* str, uint8_t color);
+extern void vga_println(const char* str);
+extern void vga_print_int_hex(uint32_t n, char* buf);
+
+static void exec_debug_dump_file_header(const char* path) {
+    int idx;
+    disk_fs_node_t node;
+    uint8_t bytes[16];
+    char hex[11];
+
+    if (!path || strcmp(path, "/bin/doom") != 0) return;
+    idx = fs_find_node(path);
+    vga_print_color("[doom-debug] node idx=", 0x0E);
+    vga_print_int_hex((uint32_t)idx, hex);
+    vga_print(hex);
+    if (idx >= 0 && fs_get_node_info(idx, &node) == 0) {
+        vga_print(" lba=");
+        vga_print_int_hex(node.lba, hex);
+        vga_print(hex);
+        vga_print(" size=");
+        vga_print_int_hex(node.size, hex);
+        vga_print(hex);
+    }
+    vga_println("");
+
+    if (fs_read_file_raw(path, bytes, 0U, sizeof(bytes)) == (int)sizeof(bytes)) {
+        vga_print_color("[doom-debug] first16=", 0x0E);
+        for (uint32_t i = 0; i < sizeof(bytes); i += 4U) {
+            uint32_t value = (uint32_t)bytes[i] |
+                             ((uint32_t)bytes[i + 1U] << 8) |
+                             ((uint32_t)bytes[i + 2U] << 16) |
+                             ((uint32_t)bytes[i + 3U] << 24);
+            vga_print_int_hex(value, hex);
+            vga_print(hex);
+            vga_print(" ");
+        }
+        vga_println("");
+    } else {
+        vga_print_color("[doom-debug] header read failed\n", 0x0C);
+    }
+}
+
 #define EXEC_PAGE_SIZE 4096U
 #define EXEC_MAX_LOAD_SEGMENTS 8U
 #define EXEC_MAX_PROGRAM_HEADERS 16U
@@ -103,6 +146,17 @@ static void exec_log_failure(const char* path, const char* stage, int status) {
     serial_write(" code=");
     serial_write_hex32((uint32_t)status);
     serial_write_char('\n');
+
+    vga_print_color("[exec] load failed path=", 0x0C);
+    vga_print(path ? path : "<null>");
+    if (stage && stage[0] != '\0') {
+        vga_print(" stage=");
+        vga_print(stage);
+    }
+    vga_print(" reason=");
+    vga_print(exec_error_string(status));
+    vga_println("");
+    exec_debug_dump_file_header(path);
 }
 
 static int exec_fail(const char* path, const char* stage, int status) {
@@ -379,6 +433,7 @@ int exec_load_file(const char* path, exec_address_space_t* out_space) {
 
 int exec_load_elf32_file(const char* path, exec_address_space_t* out_space) {
     exec_elf32_ehdr_t ehdr;
+    uint8_t ehdr_bytes[sizeof(exec_elf32_ehdr_t)];
     exec_elf32_phdr_t phdrs[EXEC_MAX_PROGRAM_HEADERS];
     exec_load_segment_t segments[EXEC_MAX_LOAD_SEGMENTS];
     disk_fs_node_t node;
@@ -399,13 +454,14 @@ int exec_load_elf32_file(const char* path, exec_address_space_t* out_space) {
     }
     if (node.size < sizeof(ehdr)) return exec_fail(path, "short-header", EXEC_ERR_FORMAT);
 
-    status = fs_read_file_raw(path, &ehdr, 0U, sizeof(ehdr));
-    if (status != (int)sizeof(ehdr)) return exec_fail(path, "read-ehdr", EXEC_ERR_IO);
+    status = fs_read_file_raw(path, ehdr_bytes, 0U, sizeof(ehdr_bytes));
+    if (status != (int)sizeof(ehdr_bytes)) return exec_fail(path, "read-ehdr", EXEC_ERR_IO);
 
-    if (ehdr.ident[0] != EXEC_ELF_MAGIC0 || ehdr.ident[1] != EXEC_ELF_MAGIC1 ||
-        ehdr.ident[2] != EXEC_ELF_MAGIC2 || ehdr.ident[3] != EXEC_ELF_MAGIC3) {
+    if (ehdr_bytes[0] != EXEC_ELF_MAGIC0 || ehdr_bytes[1] != EXEC_ELF_MAGIC1 ||
+        ehdr_bytes[2] != EXEC_ELF_MAGIC2 || ehdr_bytes[3] != EXEC_ELF_MAGIC3) {
         return exec_fail(path, "bad-magic", EXEC_ERR_FORMAT);
     }
+    memcpy(&ehdr, ehdr_bytes, sizeof(ehdr));
     if (ehdr.ident[4] != EXEC_ELF_CLASS32 || ehdr.ident[5] != EXEC_ELF_DATA_LE ||
         ehdr.ident[6] != EXEC_ELF_VERSION_CURRENT) {
         return exec_fail(path, "bad-ident", EXEC_ERR_UNSUPPORTED);
@@ -480,6 +536,7 @@ int exec_load_elf32_file(const char* path, exec_address_space_t* out_space) {
 
 int exec_load_elf64_file(const char* path, exec_address_space_t* out_space) {
     exec_elf64_ehdr_t ehdr;
+    uint8_t ehdr_bytes[sizeof(exec_elf64_ehdr_t)];
     exec_elf64_phdr_t phdrs[EXEC_MAX_PROGRAM_HEADERS];
     exec_load_segment_t segments[EXEC_MAX_LOAD_SEGMENTS];
     disk_fs_node_t node;
@@ -500,13 +557,14 @@ int exec_load_elf64_file(const char* path, exec_address_space_t* out_space) {
     }
     if (node.size < sizeof(ehdr)) return exec_fail(path, "short-header", EXEC_ERR_FORMAT);
 
-    status = fs_read_file_raw(path, &ehdr, 0U, sizeof(ehdr));
-    if (status != (int)sizeof(ehdr)) return exec_fail(path, "read-ehdr", EXEC_ERR_IO);
+    status = fs_read_file_raw(path, ehdr_bytes, 0U, sizeof(ehdr_bytes));
+    if (status != (int)sizeof(ehdr_bytes)) return exec_fail(path, "read-ehdr", EXEC_ERR_IO);
 
-    if (ehdr.ident[0] != EXEC_ELF_MAGIC0 || ehdr.ident[1] != EXEC_ELF_MAGIC1 ||
-        ehdr.ident[2] != EXEC_ELF_MAGIC2 || ehdr.ident[3] != EXEC_ELF_MAGIC3) {
+    if (ehdr_bytes[0] != EXEC_ELF_MAGIC0 || ehdr_bytes[1] != EXEC_ELF_MAGIC1 ||
+        ehdr_bytes[2] != EXEC_ELF_MAGIC2 || ehdr_bytes[3] != EXEC_ELF_MAGIC3) {
         return exec_fail(path, "bad-magic", EXEC_ERR_FORMAT);
     }
+    memcpy(&ehdr, ehdr_bytes, sizeof(ehdr));
     if (ehdr.ident[4] != EXEC_ELF_CLASS64 || ehdr.ident[5] != EXEC_ELF_DATA_LE ||
         ehdr.ident[6] != EXEC_ELF_VERSION_CURRENT) {
         return exec_fail(path, "bad-ident", EXEC_ERR_UNSUPPORTED);

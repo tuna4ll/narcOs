@@ -7,18 +7,21 @@ extern void vga_print(const char* str);
 extern void vga_print_color(const char* str, uint8_t color);
 extern void vga_println(const char* str);
 extern void vga_print_int(int num);
+extern void vga_print_int_hex(uint32_t n, char* buf);
 #define DIR_SECTOR 2048
 #define DIR_SECTOR_COUNT 8
 #define DATA_START_SECTOR 4096
-#define DATA_END_SECTOR 32768
+#define DATA_END_SECTOR 20480
 #define FS_ROOT_INDEX (-1)
 #define FS_INVALID_INDEX (-2)
+#define FS_NODE_FLAG_EXTERNAL_BLOB 0x58424C42U
 disk_fs_node_t dir_cache[MAX_FILES];
 uint8_t sector_buffer[512];
 int current_dir_index = -1;
 
 static int fs_alloc_data_run(uint32_t sectors, int ignore_idx);
 static void fs_zero_sectors(uint32_t lba, uint32_t count);
+static int fs_find_node_internal(const char* path);
 
 #define FS_DISTINCT_USER_PROGRAMS(X) \
     X(hello) \
@@ -148,6 +151,22 @@ static void set_node_sector_count(disk_fs_node_t* node, uint32_t count) {
     memcpy(node->reserved, &count, sizeof(count));
 }
 
+static uint32_t node_extra_flags(const disk_fs_node_t* node) {
+    uint32_t flags;
+
+    memcpy(&flags, node->reserved + sizeof(uint32_t), sizeof(flags));
+    return flags;
+}
+
+static void set_node_extra_flags(disk_fs_node_t* node, uint32_t flags) {
+    memcpy(node->reserved + sizeof(uint32_t), &flags, sizeof(flags));
+}
+
+static int node_is_external_blob(const disk_fs_node_t* node) {
+    return node && node->flags == FS_NODE_FILE &&
+           (node_extra_flags(node) & FS_NODE_FLAG_EXTERNAL_BLOB) == FS_NODE_FLAG_EXTERNAL_BLOB;
+}
+
 static int fs_blob_matches_file(const char* path, const uint8_t* data, size_t len) {
     uint8_t verify_buffer[512];
     size_t offset = 0;
@@ -195,14 +214,107 @@ static void fs_sync_packaged_binaries() {
 }
 
 #if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN)
-static int fs_import_disk_blob(const char* path, uint32_t src_lba, size_t len) {
-    int idx;
-    uint32_t needed_sectors;
-    uint32_t current_sectors;
-    uint32_t old_lba;
-    int new_lba;
+static int fs_read_disk_blob(uint32_t src_lba, size_t len, void* buffer, size_t offset, size_t max_len) {
+    uint8_t* bytes = (uint8_t*)buffer;
+    size_t read_len;
+    size_t copied = 0;
+    uint32_t start_sector;
+    size_t sector_offset;
+    uint32_t sectors;
 
-    if (!path || len == 0U || len > MAX_FILE_SIZE) return -1;
+    if (!bytes && max_len != 0U) return -1;
+    if (src_lba == 0U || offset >= len || max_len == 0U) return 0;
+
+    read_len = len - offset;
+    if (read_len > max_len) read_len = max_len;
+    start_sector = (uint32_t)(offset / 512U);
+    sector_offset = offset % 512U;
+    sectors = (uint32_t)((len + 511U) / 512U);
+
+    for (uint32_t sector = start_sector; sector < sectors && copied < read_len; sector++) {
+        size_t chunk;
+
+        if (storage_read_sector(src_lba + sector, sector_buffer) != 0) return -1;
+        chunk = 512U - sector_offset;
+        if (chunk > read_len - copied) chunk = read_len - copied;
+        memcpy(bytes + copied, sector_buffer + sector_offset, chunk);
+        copied += chunk;
+        sector_offset = 0U;
+    }
+
+    return (int)copied;
+}
+
+static int fs_disk_blob_info_for_path(const char* path, uint32_t* out_lba, size_t* out_len) {
+    if (!path) return 0;
+#if defined(NARCOS_DISK_DOOM_BIN)
+    if (strcmp(path, "/bin/doom") == 0) {
+        if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_DOOM_BIN_LBA;
+        if (out_len) *out_len = (size_t)NARCOS_DISK_DOOM_BIN_SIZE;
+        return 1;
+    }
+#endif
+#if defined(NARCOS_DISK_DOOM1_WAD)
+    if (strcmp(path, "/assets/doom1.wad") == 0) {
+        if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_DOOM1_WAD_LBA;
+        if (out_len) *out_len = (size_t)NARCOS_DISK_DOOM1_WAD_SIZE;
+        return 1;
+    }
+#endif
+    return 0;
+}
+
+static int fs_disk_blob_info_for_idx(int idx, uint32_t* out_lba, size_t* out_len) {
+    if (idx < 0 || idx >= MAX_FILES) return 0;
+#if defined(NARCOS_DISK_DOOM_BIN)
+    if (idx == fs_find_node_internal("/bin/doom")) {
+        if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_DOOM_BIN_LBA;
+        if (out_len) *out_len = (size_t)NARCOS_DISK_DOOM_BIN_SIZE;
+        return 1;
+    }
+#endif
+#if defined(NARCOS_DISK_DOOM1_WAD)
+    if (idx == fs_find_node_internal("/assets/doom1.wad")) {
+        if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_DOOM1_WAD_LBA;
+        if (out_len) *out_len = (size_t)NARCOS_DISK_DOOM1_WAD_SIZE;
+        return 1;
+    }
+#endif
+    return 0;
+}
+
+#else
+static int fs_read_disk_blob(uint32_t src_lba, size_t len, void* buffer, size_t offset, size_t max_len) {
+    (void)src_lba;
+    (void)len;
+    (void)buffer;
+    (void)offset;
+    (void)max_len;
+    return -1;
+}
+
+static int fs_disk_blob_info_for_path(const char* path, uint32_t* out_lba, size_t* out_len) {
+    (void)path;
+    (void)out_lba;
+    (void)out_len;
+    return 0;
+}
+
+static int fs_disk_blob_info_for_idx(int idx, uint32_t* out_lba, size_t* out_len) {
+    (void)idx;
+    (void)out_lba;
+    (void)out_len;
+    return 0;
+}
+
+#endif
+
+#if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN)
+static int fs_mount_disk_blob(const char* path, uint32_t src_lba, size_t len) {
+    int idx;
+    uint32_t sectors;
+
+    if (!path || src_lba == 0U || len == 0U || len > MAX_FILE_SIZE) return -1;
     idx = fs_find_node(path);
     if (idx == -1) {
         if (fs_create_file(path) == -1) return -1;
@@ -210,46 +322,46 @@ static int fs_import_disk_blob(const char* path, uint32_t src_lba, size_t len) {
     }
     if (idx < 0 || idx >= MAX_FILES || dir_cache[idx].flags != FS_NODE_FILE) return -1;
 
-    needed_sectors = (uint32_t)((len + 511U) / 512U);
-    current_sectors = node_sector_count(&dir_cache[idx]);
-    old_lba = dir_cache[idx].lba;
-    if (dir_cache[idx].lba == 0 || current_sectors < needed_sectors) {
-        new_lba = fs_alloc_data_run(needed_sectors, idx);
-        if (new_lba < 0) return -1;
-        dir_cache[idx].lba = (uint32_t)new_lba;
-    }
-
+    sectors = (uint32_t)((len + 511U) / 512U);
+    dir_cache[idx].lba = src_lba;
     dir_cache[idx].size = (uint32_t)len;
-    set_node_sector_count(&dir_cache[idx], needed_sectors);
+    set_node_sector_count(&dir_cache[idx], sectors);
+    set_node_extra_flags(&dir_cache[idx], FS_NODE_FLAG_EXTERNAL_BLOB);
     fs_sync();
-
-    for (uint32_t sector = 0; sector < needed_sectors; sector++) {
-        if (storage_read_sector(src_lba + sector, sector_buffer) != 0) return -1;
-        if (storage_write_sector(dir_cache[idx].lba + sector, sector_buffer) != 0) return -1;
-    }
-    if (old_lba != 0 && old_lba != dir_cache[idx].lba && current_sectors != 0U) {
-        fs_zero_sectors(old_lba, current_sectors);
-    } else if (current_sectors > needed_sectors && dir_cache[idx].lba != 0) {
-        fs_zero_sectors(dir_cache[idx].lba + needed_sectors, current_sectors - needed_sectors);
-    }
     return 0;
 }
+
 #endif
 
 #if defined(NARCOS_DISK_DOOM_BIN)
 static void fs_sync_disk_doom_binary(void) {
     int status;
+    uint8_t magic[4];
 
     (void)fs_create_dir("/bin");
-    status = fs_import_disk_blob("/bin/doom",
-                                (uint32_t)NARCOS_DISK_DOOM_BIN_LBA,
-                                (size_t)NARCOS_DISK_DOOM_BIN_SIZE);
+    status = fs_mount_disk_blob("/bin/doom",
+                               (uint32_t)NARCOS_DISK_DOOM_BIN_LBA,
+                               (size_t)NARCOS_DISK_DOOM_BIN_SIZE);
     if (status != 0) {
-        serial_write("[fs] disk doom binary import failed len=");
+        serial_write("[fs] disk doom binary mount failed len=");
         serial_write_hex32((uint32_t)NARCOS_DISK_DOOM_BIN_SIZE);
         serial_write(" lba=");
         serial_write_hex32((uint32_t)NARCOS_DISK_DOOM_BIN_LBA);
         serial_write_char('\n');
+        vga_print_color("[fs] doom binary mount failed\n", 0x0C);
+    } else {
+        vga_print_color("[fs] doom binary mounted at /bin/doom\n", 0x0A);
+        if (fs_read_file_raw("/bin/doom", magic, 0U, sizeof(magic)) == (int)sizeof(magic)) {
+            uint32_t value = (uint32_t)magic[0] | ((uint32_t)magic[1] << 8) |
+                             ((uint32_t)magic[2] << 16) | ((uint32_t)magic[3] << 24);
+            char buf[11];
+            vga_print("[fs] /bin/doom magic=");
+            vga_print_int_hex(value, buf);
+            vga_print(buf);
+            vga_println(value == 0x464C457FU ? " (ELF OK)" : " (BAD)");
+        } else {
+            vga_print_color("[fs] /bin/doom magic read failed\n", 0x0C);
+        }
     }
 }
 #endif
@@ -259,15 +371,18 @@ static void fs_sync_disk_doom1_wad(void) {
     int status;
 
     (void)fs_create_dir("/assets");
-    status = fs_import_disk_blob("/assets/doom1.wad",
-                                (uint32_t)NARCOS_DISK_DOOM1_WAD_LBA,
-                                (size_t)NARCOS_DISK_DOOM1_WAD_SIZE);
+    status = fs_mount_disk_blob("/assets/doom1.wad",
+                               (uint32_t)NARCOS_DISK_DOOM1_WAD_LBA,
+                               (size_t)NARCOS_DISK_DOOM1_WAD_SIZE);
     if (status != 0) {
-        serial_write("[fs] disk doom1.wad import failed len=");
+        serial_write("[fs] disk doom1.wad mount failed len=");
         serial_write_hex32((uint32_t)NARCOS_DISK_DOOM1_WAD_SIZE);
         serial_write(" lba=");
         serial_write_hex32((uint32_t)NARCOS_DISK_DOOM1_WAD_LBA);
         serial_write_char('\n');
+        vga_print_color("[fs] doom1.wad mount failed\n", 0x0C);
+    } else {
+        vga_print_color("[fs] doom1.wad mounted at /assets/doom1.wad\n", 0x0A);
     }
 }
 #endif
@@ -371,7 +486,9 @@ static int fs_validate() {
             if (dir_cache[i].size > MAX_FILE_SIZE) return 0;
             if (dir_cache[i].size == 0 && sectors != 0) return 0;
             if (dir_cache[i].size > 0 && sectors == 0) return 0;
-            if (dir_cache[i].lba != 0 && (dir_cache[i].lba < DATA_START_SECTOR || dir_cache[i].lba + sectors > DATA_END_SECTOR)) {
+            if (!node_is_external_blob(&dir_cache[i]) &&
+                dir_cache[i].lba != 0 &&
+                (dir_cache[i].lba < DATA_START_SECTOR || dir_cache[i].lba + sectors > DATA_END_SECTOR)) {
                 return 0;
             }
         }
@@ -572,6 +689,7 @@ int fs_write_file_raw_by_idx(int idx, const void* data, size_t len) {
     int moved = 0;
 
     if (idx < 0 || idx >= MAX_FILES || dir_cache[idx].flags != FS_NODE_FILE) return -1;
+    if (node_is_external_blob(&dir_cache[idx])) return -1;
     if (!bytes && len != 0U) return -1;
     if (len > MAX_FILE_SIZE) len = MAX_FILE_SIZE;
     current_sectors = node_sector_count(&dir_cache[idx]);
@@ -629,6 +747,7 @@ int fs_write_file_raw_at_by_idx(int idx, const void* data, size_t offset, size_t
     int write_status;
 
     if (idx < 0 || idx >= MAX_FILES || dir_cache[idx].flags != FS_NODE_FILE) return -1;
+    if (node_is_external_blob(&dir_cache[idx])) return -1;
     if (!data && len != 0U) return -1;
     if (offset > MAX_FILE_SIZE) return -1;
     if (len > MAX_FILE_SIZE - offset) len = MAX_FILE_SIZE - offset;
@@ -670,10 +789,15 @@ int fs_read_file_raw_by_idx(int idx, void* buffer, size_t offset, size_t max_len
     size_t copied = 0;
     uint32_t start_sector;
     size_t sector_offset;
+    uint32_t blob_lba;
+    size_t blob_len;
 
     if (idx < 0 || idx >= MAX_FILES || dir_cache[idx].flags != FS_NODE_FILE) return -1;
     packaged = fs_find_packaged_binary_by_idx(idx);
     if (packaged) return fs_read_packaged_binary(packaged, buffer, offset, max_len);
+    if (fs_disk_blob_info_for_idx(idx, &blob_lba, &blob_len)) {
+        return fs_read_disk_blob(blob_lba, blob_len, buffer, offset, max_len);
+    }
     if (!bytes && max_len != 0U) return -1;
     if (offset >= dir_cache[idx].size || max_len == 0U) return 0;
 
@@ -758,8 +882,13 @@ int fs_read_file(const char* name, char* buffer, size_t max_len) {
 int fs_read_file_raw(const char* name, void* buffer, size_t offset, size_t max_len) {
     const fs_packaged_binary_t* packaged = fs_find_packaged_binary(name);
     int idx = fs_find_node(name);
+    uint32_t blob_lba;
+    size_t blob_len;
 
     if (packaged) return fs_read_packaged_binary(packaged, buffer, offset, max_len);
+    if (fs_disk_blob_info_for_path(name, &blob_lba, &blob_len)) {
+        return fs_read_disk_blob(blob_lba, blob_len, buffer, offset, max_len);
+    }
     if (idx == -1) return -1;
     return fs_read_file_raw_by_idx(idx, buffer, offset, max_len);
 }
@@ -769,7 +898,10 @@ int fs_delete_file(const char* name) {
     if (idx >= 0 && dir_cache[idx].flags == FS_NODE_DIR && fs_dir_has_children(idx)) return -1;
     if (idx >= 0 && dir_cache[idx].flags == FS_NODE_FILE) {
         uint32_t sectors = node_sector_count(&dir_cache[idx]);
-        if (dir_cache[idx].lba != 0 && sectors != 0) fs_zero_sectors(dir_cache[idx].lba, sectors);
+        if (!node_is_external_blob(&dir_cache[idx]) &&
+            dir_cache[idx].lba != 0 && sectors != 0) {
+            fs_zero_sectors(dir_cache[idx].lba, sectors);
+        }
     }
     dir_cache[idx].flags = 0;
     dir_cache[idx].size = 0;
@@ -842,11 +974,23 @@ int fs_list_dir_entries(disk_fs_node_t* out_entries, int max_entries) {
 
 int fs_get_node_info(int idx, disk_fs_node_t* out_node) {
     const fs_packaged_binary_t* packaged;
+    uint32_t blob_lba;
+    size_t blob_len;
 
     if (!out_node) return -1;
     if (idx < 0 || idx >= MAX_FILES) return -1;
     if (dir_cache[idx].flags == 0) return -1;
     *out_node = dir_cache[idx];
+    if (fs_disk_blob_info_for_idx(idx, &blob_lba, &blob_len)) {
+        uint32_t sectors = (uint32_t)((blob_len + 511U) / 512U);
+
+        out_node->flags = FS_NODE_FILE;
+        out_node->lba = blob_lba;
+        out_node->size = (uint32_t)blob_len;
+        memcpy(out_node->reserved, &sectors, sizeof(sectors));
+        set_node_extra_flags(out_node, FS_NODE_FLAG_EXTERNAL_BLOB);
+        return 0;
+    }
     packaged = fs_find_packaged_binary_by_idx(idx);
     if (packaged) {
         uint32_t sectors;
@@ -869,7 +1013,7 @@ void get_current_dir_name(char* buf) {
     }
 }
 
-int fs_find_node(const char* path) {
+static int fs_find_node_internal(const char* path) {
     if (!path || path[0] == '\0') return -1;
     if (strcmp(path, "/") == 0) return FS_ROOT_INDEX;
     if (strcmp(path, ".") == 0) return current_dir_index;
@@ -879,6 +1023,10 @@ int fs_find_node(const char* path) {
     int parent = fs_walk_path(path, 1, leaf);
     if (parent == FS_INVALID_INDEX || leaf[0] == '\0') return -1;
     return fs_find_child(parent, leaf, 0);
+}
+
+int fs_find_node(const char* path) {
+    return fs_find_node_internal(path);
 }
 
 void fs_get_path_by_index(int idx, char* buf, size_t max_len) {

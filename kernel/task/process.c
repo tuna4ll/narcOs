@@ -27,6 +27,9 @@ extern int get_mouse_x(void);
 extern int get_mouse_y(void);
 extern int mouse_left_pressed(void);
 extern int mouse_right_pressed(void);
+extern void vga_print(const char* str);
+extern void vga_print_color(const char* str, uint8_t color);
+extern void vga_println(const char* str);
 
 void process_bootstrap_entry(void);
 static void idle_process(void* arg);
@@ -223,6 +226,11 @@ int process_create_user(const char* path, const char* const* argv, int argc, uin
         serial_write(" status=");
         serial_write_hex32((uint32_t)status);
         serial_write_char('\n');
+        vga_print_color("[sched] user load failed ", 0x0C);
+        vga_print(path);
+        vga_print(" reason=");
+        vga_print(exec_error_string(status));
+        vga_println("");
         if (caller && caller != proc && process_user_space_ready(caller)) {
             (void)exec_activate_address_space(&caller->user_space);
         }
@@ -233,6 +241,8 @@ int process_create_user(const char* path, const char* const* argv, int argc, uin
         serial_write("[sched] user context init failed ");
         serial_write(path);
         serial_write_char('\n');
+        vga_print_color("[sched] user context init failed ", 0x0C);
+        vga_println(path);
         if (caller && caller != proc && process_user_space_ready(caller)) {
             (void)exec_activate_address_space(&caller->user_space);
         }
