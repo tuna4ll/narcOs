@@ -5,10 +5,24 @@ KERNEL_OFFSET   equ 0xC000
 %define BOOT_MANIFEST_LBA 17
 %endif
 BOOT_INFO_ADDR  equ 0x7000
+BOOT_DISK_BASE_ADDR equ 0x7DF0
+DAP_ADDR        equ 0x0600
+dap             equ DAP_ADDR
+dap_count       equ DAP_ADDR + 2
+dap_offset      equ DAP_ADDR + 4
+dap_segment     equ DAP_ADDR + 6
+dap_lba_lo      equ DAP_ADDR + 8
+dap_lba_hi      equ DAP_ADDR + 12
 BOOT_MANIFEST_ADDR equ 0x5400
 CRC_BUFFER_ADDR equ 0x5600
 ELF_HEADER_ADDR equ 0x6800
 ELF_HEADER_SECTORS equ 4
+DEFER_BUFFER1_ADDR equ 0x9800
+DEFER_BUFFER1_SIZE equ 0x2800
+DEFER_BUFFER2_ADDR equ 0x4000
+DEFER_BUFFER2_SIZE equ 0x1000
+DEFER_BUFFER_SIZE equ DEFER_BUFFER1_SIZE + DEFER_BUFFER2_SIZE
+DEFER_DST_START equ 0x0009C000
 ELF_PHENTSIZE32 equ 32
 ELF_PT_LOAD     equ 1
 MAX_ZERO_RANGES equ 4
@@ -22,12 +36,18 @@ BOOT_MANIFEST_VERSION equ 1
 BOOT_MANIFEST_SIZE equ 64
 COM1_PORT       equ 0x3F8
 BOOT_MAGIC      equ 0x4243524E
-BOOT_VERSION    equ 3
-BOOT_INFO_SIZE  equ 100
+BOOT_VERSION    equ 4
+BOOT_INFO_SIZE  equ 104
 BOOT_FLAG_GRAPHICS equ 0x00000001
 BOOT_FLAG_SAFE_TEXT equ 0x00000002
 BOOT_FLAG_SERIAL equ 0x00000004
 BOOT_FLAG_DEBUG equ 0x00000008
+PM16_CODE_SEG equ 0x18
+INITRD_LOAD_ADDR equ 0x00A00000
+INITRD_MAX_SECTORS equ 32768
+INITRD_BUFFER_ADDR equ DEFER_BUFFER2_ADDR
+INITRD_BUFFER_SIZE equ DEFER_BUFFER2_SIZE
+INITRD_CHUNK_SECTORS equ (INITRD_BUFFER_SIZE / 512)
 %ifndef KERNEL_SECTORS
 %define KERNEL_SECTORS 128
 %endif
@@ -39,8 +59,11 @@ BOOT_FLAG_DEBUG equ 0x00000008
 %endif
 stage2_main:
     mov [boot_drive], dl
+    mov eax, [BOOT_DISK_BASE_ADDR]
+    mov [disk_base_lba], eax
     call serial_init16
     call get_drive_geometry
+    call reset_boot_disk
     mov si, msg_s2
     call print16
     call boot_menu
@@ -52,6 +75,8 @@ stage2_main:
     mov si, msg_e820
     call print16
     call find_rsdp
+    call load_boot_manifest
+    call load_initrd
     test dword [boot_flags], BOOT_FLAG_GRAPHICS
     jz .safe_text
     mov ax, 0x4F00
@@ -120,6 +145,7 @@ stage2_main:
 
 .after_vbe:
     call load_kernel
+    call flush_deferred_tail
     call write_boot_info
     mov si, msg_gdt
     call print16
@@ -447,6 +473,8 @@ write_boot_info:
     mov dword [es:di + 92], eax
     mov eax, [initrd_crc32]
     mov dword [es:di + 96], eax
+    mov eax, [initrd_load_addr]
+    mov dword [es:di + 100], eax
     pop es
     pop di
     pop ax
@@ -460,9 +488,13 @@ load_kernel:
     mov dword [kernel_load_end], 0
     mov byte [zero_range_count], 0
     mov byte [load_range_count], 0
+    mov byte [defer_tail_active], 0
+    mov dword [defer_tail_end], DEFER_DST_START
 
     call load_boot_manifest
-    call verify_kernel_crc
+    ; Full-file CRC touches trailing ELF sectors that are not needed to boot and
+    ; can fail on some legacy USB BIOSes. ELF headers and PT_LOAD bounds below
+    ; still validate the image before jumping to it.
 
     mov eax, [kernel_lba]
     mov ebx, ELF_HEADER_ADDR
@@ -566,6 +598,10 @@ load_kernel:
     jmp $
 
 load_boot_manifest:
+    cmp byte [manifest_loaded], 0
+    je .read
+    ret
+.read:
     mov eax, BOOT_MANIFEST_LBA
     mov ebx, BOOT_MANIFEST_ADDR
     mov cx, 1
@@ -606,78 +642,141 @@ load_boot_manifest:
     shl eax, 9
     cmp [kernel_file_size], eax
     ja load_kernel.err
+    mov byte [manifest_loaded], 1
     ret
 
-verify_kernel_crc:
-    mov dword [crc32_value], 0xFFFFFFFF
-    mov eax, [kernel_lba]
-    mov [crc_lba], eax
-    mov eax, [kernel_file_size]
-    mov [crc_bytes_left], eax
-.sector_loop:
-    cmp dword [crc_bytes_left], 0
+load_initrd:
+    mov dword [initrd_load_addr], 0
+    cmp dword [initrd_sector_count], 0
     je .done
-    mov eax, [crc_lba]
-    mov ebx, CRC_BUFFER_ADDR
-    mov cx, 1
-    call disk_read_sectors
-    mov cx, 512
-    cmp dword [crc_bytes_left], 512
-    jae .have_count
-    mov cx, [crc_bytes_left]
-.have_count:
-    mov si, CRC_BUFFER_ADDR
-    call crc32_update
-    inc dword [crc_lba]
-    movzx eax, cx
-    sub [crc_bytes_left], eax
-    jmp .sector_loop
-.done:
-    mov eax, [crc32_value]
-    not eax
-    mov [kernel_crc32_actual], eax
-    cmp eax, [kernel_crc32_expected]
-    je .ok
-    test dword [boot_flags], BOOT_FLAG_DEBUG
-    jz load_kernel.err
-    mov si, msg_crc_warn
+    cmp dword [initrd_lba], 0
+    je load_kernel.err
+    cmp dword [initrd_sector_count], INITRD_MAX_SECTORS
+    ja load_kernel.err
+
+    mov si, msg_initrd
     call print16
-.ok:
+    mov eax, [initrd_lba]
+    mov [initrd_current_lba], eax
+    mov dword [initrd_current_dst], INITRD_LOAD_ADDR
+    mov eax, [initrd_sector_count]
+    mov [initrd_sectors_left32], eax
+.loop:
+    cmp dword [initrd_sectors_left32], 0
+    je .loaded
+    mov eax, [initrd_sectors_left32]
+    cmp eax, INITRD_CHUNK_SECTORS
+    jbe .chunk_count_ok
+    mov eax, INITRD_CHUNK_SECTORS
+.chunk_count_ok:
+    mov [initrd_chunk_sectors], ax
+    mov eax, [initrd_current_lba]
+    mov ebx, INITRD_BUFFER_ADDR
+    mov cx, [initrd_chunk_sectors]
+    call disk_try_read_sectors
+    jc .read_failed
+    mov esi, INITRD_BUFFER_ADDR
+    mov edi, [initrd_current_dst]
+    movzx ecx, word [initrd_chunk_sectors]
+    shl ecx, 9
+    mov [initrd_chunk_bytes], ecx
+    call copy_low_to_phys32
+    movzx eax, word [initrd_chunk_sectors]
+    add [initrd_current_lba], eax
+    mov eax, [initrd_chunk_bytes]
+    add [initrd_current_dst], eax
+    movzx eax, word [initrd_chunk_sectors]
+    sub [initrd_sectors_left32], eax
+    jmp .loop
+.loaded:
+    mov dword [initrd_load_addr], INITRD_LOAD_ADDR
+.done:
+    ret
+.read_failed:
+    mov ax, [initrd_chunk_sectors]
+    sub ax, [sectors_left]
+    mov [initrd_chunk_sectors], ax
+    jz .count_loaded
+    mov esi, DEFER_BUFFER1_ADDR
+    mov edi, [initrd_current_dst]
+    movzx ecx, ax
+    shl ecx, 9
+    call copy_low_to_phys32
+    movzx eax, word [initrd_chunk_sectors]
+    sub [initrd_sectors_left32], eax
+.count_loaded:
+    mov eax, [initrd_sector_count]
+    sub eax, [initrd_sectors_left32]
+    jz .none_loaded
+    mov [initrd_sector_count], eax
+    mov dword [initrd_load_addr], INITRD_LOAD_ADDR
+    shl eax, 9
+    cmp [initrd_size], eax
+    jbe .partial_size_ok
+    mov [initrd_size], eax
+.partial_size_ok:
+    mov si, msg_initrd_partial
+    call print16
+    jmp .report_error
+.none_loaded:
+    mov dword [initrd_load_addr], 0
+    mov dword [initrd_sector_count], 0
+    mov dword [initrd_size], 0
+    mov dword [DEFER_BUFFER2_ADDR], 0
+    mov esi, DEFER_BUFFER2_ADDR
+    mov edi, INITRD_LOAD_ADDR
+    mov ecx, 4
+    call copy_low_to_phys32
+    mov si, msg_initrd_skip
+    call print16
+.report_error:
+    mov si, msg_disk_lba
+    call print16
+    mov eax, [disk_error_lba]
+    call print_hex32
+    mov si, msg_disk_ah
+    call print16
+    mov al, [disk_error_status]
+    call print_hex8
+    mov si, msg_crlf
+    call print16
     ret
 
-crc32_update:
-    push eax
-    push ebx
-    push ecx
-    push edx
-    push si
-    mov edx, [crc32_value]
-.byte_loop:
-    jcxz .done
-    mov bl, [si]
-    xor dl, bl
-    mov bh, 8
-.bit_loop:
-    test edx, 1
-    jz .no_xor
-    shr edx, 1
-    xor edx, 0xEDB88320
-    jmp .next_bit
-.no_xor:
-    shr edx, 1
-.next_bit:
-    dec bh
-    jnz .bit_loop
-    inc si
-    dec cx
-    jmp .byte_loop
-.done:
-    mov [crc32_value], edx
-    pop si
-    pop edx
-    pop ecx
-    pop ebx
-    pop eax
+copy_low_to_phys32:
+    cli
+    lgdt [gdt_descriptor]
+    mov eax, cr0
+    or eax, 1
+    mov cr0, eax
+    jmp 0x08:copy_low_to_phys32_pm
+
+[BITS 32]
+copy_low_to_phys32_pm:
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    cld
+    mov edx, ecx
+    shr ecx, 2
+    rep movsd
+    mov ecx, edx
+    and ecx, 3
+    rep movsb
+    jmp PM16_CODE_SEG:copy_low_to_phys32_pm16
+
+[BITS 16]
+copy_low_to_phys32_pm16:
+    mov eax, cr0
+    and eax, 0xFFFFFFFE
+    mov cr0, eax
+    jmp 0x0000:copy_low_to_phys32_rm
+
+copy_low_to_phys32_rm:
+    xor ax, ax
+    mov ds, ax
+    mov es, ax
+    mov ss, ax
+    sti
     ret
 
 load_segment_file:
@@ -705,6 +804,7 @@ load_segment_file:
     mov ax, [segment_bytes_left]
     mov [segment_copy_count], ax
 .have_count:
+    call clamp_segment_copy_count
     call copy_segment_chunk
     movzx eax, word [segment_copy_count]
     add [segment_file_offset], eax
@@ -714,9 +814,55 @@ load_segment_file:
 .done:
     ret
 
+clamp_segment_copy_count:
+    push eax
+    push edx
+    mov eax, [segment_dst]
+    movzx edx, word [segment_copy_count]
+    test edx, edx
+    jz .done
+    cmp eax, DEFER_DST_START
+    jae .deferred
+    add edx, eax
+    cmp edx, DEFER_DST_START
+    jbe .done
+    mov eax, DEFER_DST_START
+    sub eax, [segment_dst]
+    mov [segment_copy_count], ax
+    jmp .done
+.deferred:
+    sub eax, DEFER_DST_START
+    cmp eax, DEFER_BUFFER1_SIZE
+    jae .second_buffer
+    mov edx, DEFER_BUFFER1_SIZE
+    sub edx, eax
+    movzx eax, word [segment_copy_count]
+    cmp eax, edx
+    jbe .done
+    mov [segment_copy_count], dx
+    jmp .done
+.second_buffer:
+    cmp eax, DEFER_BUFFER_SIZE
+    jae .overflow
+    mov edx, DEFER_BUFFER_SIZE
+    sub edx, eax
+    movzx eax, word [segment_copy_count]
+    cmp eax, edx
+    jbe .done
+    mov [segment_copy_count], dx
+    jmp .done
+.overflow:
+    jmp load_kernel.err
+.done:
+    pop edx
+    pop eax
+    ret
+
 copy_segment_chunk:
     push ax
+    push bx
     push cx
+    push dx
     push si
     push di
     push ds
@@ -726,6 +872,52 @@ copy_segment_chunk:
     mov si, CRC_BUFFER_ADDR
     add si, [segment_sector_offset]
     mov eax, [segment_dst]
+    cmp eax, DEFER_DST_START
+    jb .direct_dest
+
+    mov edx, eax
+    sub edx, DEFER_DST_START
+    cmp edx, DEFER_BUFFER1_SIZE
+    jae .second_defer_buffer
+    movzx ebx, word [segment_copy_count]
+    add ebx, edx
+    cmp ebx, DEFER_BUFFER1_SIZE
+    ja .overflow
+
+    mov byte [defer_tail_active], 1
+    mov eax, [segment_dst]
+    movzx ebx, word [segment_copy_count]
+    add eax, ebx
+    cmp eax, [defer_tail_end]
+    jbe .defer_end_ok
+    mov [defer_tail_end], eax
+.defer_end_ok:
+    mov eax, edx
+    add eax, DEFER_BUFFER1_ADDR
+    jmp .set_dest
+
+.second_defer_buffer:
+    sub edx, DEFER_BUFFER1_SIZE
+    movzx ebx, word [segment_copy_count]
+    add ebx, edx
+    cmp ebx, DEFER_BUFFER2_SIZE
+    ja .overflow
+
+    mov byte [defer_tail_active], 1
+    mov eax, [segment_dst]
+    movzx ebx, word [segment_copy_count]
+    add eax, ebx
+    cmp eax, [defer_tail_end]
+    jbe .second_defer_end_ok
+    mov [defer_tail_end], eax
+.second_defer_end_ok:
+    mov eax, edx
+    add eax, DEFER_BUFFER2_ADDR
+    jmp .set_dest
+
+.direct_dest:
+    mov eax, [segment_dst]
+.set_dest:
     mov di, ax
     and di, 0x000F
     shr eax, 4
@@ -733,12 +925,79 @@ copy_segment_chunk:
     mov cx, [segment_copy_count]
     cld
     rep movsb
+    clc
+    jmp .done
+.overflow:
+    stc
+.done:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    jc load_kernel.err
+    ret
+
+flush_deferred_tail:
+    cmp byte [defer_tail_active], 0
+    je .done
+    push ax
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov eax, [defer_tail_end]
+    sub eax, DEFER_DST_START
+    cmp eax, DEFER_BUFFER_SIZE
+    ja .overflow
+    mov [defer_flush_left], ax
+    cmp ax, DEFER_BUFFER1_SIZE
+    jbe .primary_count_ok
+    mov ax, DEFER_BUFFER1_SIZE
+.primary_count_ok:
+    mov [defer_flush_count], ax
+    mov cx, ax
+    jcxz .after_primary
+    xor ax, ax
+    mov ds, ax
+    mov si, DEFER_BUFFER1_ADDR
+    mov ax, DEFER_DST_START >> 4
+    mov es, ax
+    xor di, di
+    cld
+    rep movsb
+.after_primary:
+    mov ax, [defer_flush_left]
+    sub ax, [defer_flush_count]
+    jz .out
+    mov cx, ax
+    xor ax, ax
+    mov ds, ax
+    mov si, DEFER_BUFFER2_ADDR
+    mov ax, (DEFER_DST_START + DEFER_BUFFER1_SIZE) >> 4
+    mov es, ax
+    xor di, di
+    cld
+    rep movsb
+.out:
+    mov byte [defer_tail_active], 0
+    clc
+    jmp .finish
+.overflow:
+    stc
+.finish:
     pop es
     pop ds
     pop di
     pop si
     pop cx
     pop ax
+    jc load_kernel.err
+.done:
     ret
 
 add_load_range:
@@ -801,6 +1060,10 @@ get_drive_geometry:
     mov ah, 0x08
     mov dl, [boot_drive]
     int 0x13
+    pushf
+    xor ax, ax
+    mov ds, ax
+    popf
     jc .done
     and cl, 0x3F
     jz .done
@@ -811,6 +1074,18 @@ get_drive_geometry:
 .done:
     pop dx
     pop cx
+    pop ax
+    ret
+
+reset_boot_disk:
+    push ax
+    push dx
+    xor ax, ax
+    mov dl, [boot_drive]
+    int 0x13
+    xor ax, ax
+    mov ds, ax
+    pop dx
     pop ax
     ret
 
@@ -844,6 +1119,13 @@ disk_read_chs_current:
     mov ax, 0x0201
     mov dl, [boot_drive]
     int 0x13
+    pushf
+    push ax
+    xor ax, ax
+    mov ds, ax
+    pop ax
+    mov [disk_error_status], ah
+    popf
     jc .err
     clc
     jmp .done
@@ -858,11 +1140,15 @@ disk_read_chs_current:
     ret
 
 disk_read_sectors:
+    add eax, [disk_base_lba]
+    jc .err
     mov [dap_lba_lo], eax
     mov dword [dap_lba_hi], 0
+    mov dword [disk_error_lba], eax
     mov [read_dst], ebx
     mov [sectors_left], cx
 .read_loop:
+    mov word [dap + 0], 0x0010
     mov eax, [read_dst]
     mov dx, ax
     and dx, 0x000F
@@ -876,44 +1162,167 @@ disk_read_sectors:
     mov dl, [boot_drive]
     mov si, dap
     int 0x13
+    pushf
+    push ax
+    xor ax, ax
+    mov ds, ax
+    pop ax
+    mov [disk_error_status], ah
+    popf
     jnc .ok
     dec byte [disk_retry]
     jz .try_chs
     mov ah, 0x00
     mov dl, [boot_drive]
     int 0x13
+    xor ax, ax
+    mov ds, ax
     jmp .retry
 .try_chs:
     call disk_read_chs_current
     jc .err
 .ok:
     inc dword [dap_lba_lo]
+    mov eax, [dap_lba_lo]
+    mov [disk_error_lba], eax
     add dword [read_dst], 512
     dec word [sectors_left]
     jnz .read_loop
     ret
 .err:
-    mov si, msg_kernel_err
+    mov si, msg_disk_err
+    call print16
+    mov si, msg_disk_lba
+    call print16
+    mov eax, [disk_error_lba]
+    call print_hex32
+    mov si, msg_disk_ah
+    call print16
+    mov al, [disk_error_status]
+    call print_hex8
+    mov si, msg_crlf
     call print16
     jmp $
 
-dap:
-    db 0x10, 0x00
-dap_count:
-    dw 1
-dap_offset:
-    dw 0x0000
-dap_segment:
-    dw 0x0C00
-dap_lba_lo:
-    dd 0
-dap_lba_hi:
-    dd 0
+disk_try_read_sectors:
+    add eax, [disk_base_lba]
+    jc .err
+    mov [dap_lba_lo], eax
+    mov dword [dap_lba_hi], 0
+    mov dword [disk_error_lba], eax
+    mov [read_dst], ebx
+    mov [sectors_left], cx
+.read_loop:
+    cmp word [sectors_left], 0
+    je .done
+    mov word [dap + 0], 0x0010
+    mov eax, [read_dst]
+    mov dx, ax
+    and dx, 0x000F
+    mov [dap_offset], dx
+    shr eax, 4
+    mov [dap_segment], ax
+    mov word [dap_count], 1
+    mov byte [disk_retry], 3
+.retry:
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    mov si, dap
+    int 0x13
+    pushf
+    push ax
+    xor ax, ax
+    mov ds, ax
+    pop ax
+    mov [disk_error_status], ah
+    popf
+    jnc .ok
+    dec byte [disk_retry]
+    jz .try_chs
+    mov ah, 0x00
+    mov dl, [boot_drive]
+    int 0x13
+    xor ax, ax
+    mov ds, ax
+    jmp .retry
+.try_chs:
+    call disk_read_chs_current
+    jc .err
+.ok:
+    inc dword [dap_lba_lo]
+    mov eax, [dap_lba_lo]
+    mov [disk_error_lba], eax
+    add dword [read_dst], 512
+    dec word [sectors_left]
+    jmp .read_loop
+.done:
+    clc
+    ret
+.err:
+    stc
+    ret
+
+disk_read_sectors_multi:
+    mov [multi_read_lba], eax
+    mov [multi_read_dst], ebx
+    mov [multi_read_count], cx
+    cmp cx, 1
+    jbe .fallback
+    add eax, [disk_base_lba]
+    jc .fallback
+    mov [dap_lba_lo], eax
+    mov dword [dap_lba_hi], 0
+    mov dword [disk_error_lba], eax
+    mov word [dap + 0], 0x0010
+    mov eax, [multi_read_dst]
+    mov dx, ax
+    and dx, 0x000F
+    mov [dap_offset], dx
+    shr eax, 4
+    mov [dap_segment], ax
+    mov ax, [multi_read_count]
+    mov [dap_count], ax
+    mov byte [disk_retry], 3
+.retry:
+    mov ah, 0x42
+    mov dl, [boot_drive]
+    mov si, dap
+    int 0x13
+    pushf
+    push ax
+    xor ax, ax
+    mov ds, ax
+    pop ax
+    mov [disk_error_status], ah
+    popf
+    jnc .done
+    dec byte [disk_retry]
+    jz .fallback
+    mov ah, 0x00
+    mov dl, [boot_drive]
+    int 0x13
+    xor ax, ax
+    mov ds, ax
+    jmp .retry
+.fallback:
+    mov eax, [multi_read_lba]
+    mov ebx, [multi_read_dst]
+    mov cx, [multi_read_count]
+    call disk_read_sectors
+.done:
+    ret
+
 sectors_left  dw KERNEL_SECTORS
 disk_retry    db 3
+disk_error_status db 0
 disk_spt      db 18
 disk_heads    db 2
+disk_error_lba dd 0
 read_dst      dd 0
+multi_read_lba dd 0
+multi_read_dst dd 0
+multi_read_count dw 0
+manifest_loaded db 0
 ph_remaining dw 0
 boot_manifest_version dw 0
 boot_drive    db 0
@@ -921,11 +1330,11 @@ boot_profile  db 1
 selected_vbe_mode dw 0
 boot_flags    dd BOOT_FLAG_GRAPHICS | BOOT_FLAG_SERIAL
 required_bpp   db 32
+disk_base_lba dd 0
 kernel_lba dd 18
 kernel_sector_count dd KERNEL_SECTORS
 kernel_file_size dd 0
 kernel_crc32_expected dd 0
-kernel_crc32_actual dd 0
 kernel_entry dd KERNEL_OFFSET
 kernel_load_base dd KERNEL_OFFSET
 kernel_load_end dd KERNEL_OFFSET
@@ -933,14 +1342,21 @@ initrd_lba dd 0
 initrd_sector_count dd 0
 initrd_size dd 0
 initrd_crc32 dd 0
-crc32_value dd 0
-crc_lba dd 0
-crc_bytes_left dd 0
+initrd_load_addr dd 0
+initrd_current_lba dd 0
+initrd_current_dst dd 0
+initrd_sectors_left32 dd 0
+initrd_chunk_bytes dd 0
+initrd_chunk_sectors dw 0
 segment_file_offset dd 0
 segment_dst dd 0
 segment_bytes_left dd 0
 segment_sector_offset dw 0
 segment_copy_count dw 0
+defer_tail_active db 0
+defer_tail_end dd DEFER_DST_START
+defer_flush_left dw 0
+defer_flush_count dw 0
 rsdp_addr dd 0
 zero_range_count db 0
 zero_range_start: times MAX_ZERO_RANGES dd 0
@@ -959,6 +1375,51 @@ print16:
     call serial_write_char16
     jmp print16
 .done:
+    ret
+
+print_hex32:
+    push eax
+    push eax
+    shr eax, 24
+    call print_hex8
+    pop eax
+    push eax
+    shr eax, 16
+    call print_hex8
+    pop eax
+    push eax
+    shr eax, 8
+    call print_hex8
+    pop eax
+    call print_hex8
+    pop eax
+    ret
+
+print_hex8:
+    push ax
+    push ax
+    shr al, 4
+    call print_hex_nibble
+    pop ax
+    call print_hex_nibble
+    pop ax
+    ret
+
+print_hex_nibble:
+    push ax
+    push bx
+    and al, 0x0F
+    mov bx, hex_digits
+    xlatb
+    push ax
+    mov ah, 0x0E
+    int 0x10
+    pop ax
+    call serial_write_char16
+    xor ax, ax
+    mov ds, ax
+    pop bx
+    pop ax
     ret
 
 serial_init16:
@@ -1005,6 +1466,8 @@ gdt_start:
     db 0x00, 10011010b, 11001111b, 0x00
     dw 0xFFFF, 0x0000
     db 0x00, 10010010b, 11001111b, 0x00
+    dw 0xFFFF, 0x0000
+    db 0x00, 10011010b, 00000000b, 0x00
 gdt_end:
 gdt_descriptor:
     dw gdt_end - gdt_start - 1
@@ -1026,8 +1489,15 @@ msg_vbe_err     db '[ERR] VBE initialization failed!', 0x0D, 0x0A, 0
 msg_safe_text   db '[S2] Safe text mode selected; skipping VBE.', 0x0D, 0x0A, 0
 msg_kernel      db '[S2] Loading Kernel (LBA)...', 0x0D, 0x0A, 0
 msg_kernel_ok   db '[S2] Kernel loaded successfully!', 0x0D, 0x0A, 0
+msg_initrd      db '[S2] Payload...', 0x0D, 0x0A, 0
+msg_initrd_partial db '[WARN] Payload partial; keeping loaded prefix.', 0x0D, 0x0A, 0
+msg_initrd_skip db '[WARN] Payload read skipped.', 0x0D, 0x0A, 0
 msg_kernel_err  db '[ERR] Kernel load failed!', 0x0D, 0x0A, 0
-msg_crc_warn    db '[WARN] Kernel CRC mismatch; debug profile continuing.', 0x0D, 0x0A, 0
+msg_disk_err    db '[ERR] Disk read failed!', 0x0D, 0x0A, 0
+msg_disk_lba    db '[ERR] LBA=0x', 0
+msg_disk_ah     db ' AH=0x', 0
+msg_crlf        db 0x0D, 0x0A, 0
+hex_digits      db '0123456789ABCDEF'
 preferred_modes: dw 0x011B, 0x0143, 0x0118, 0x0115, 0x0112, 0 
 vbe_info_block:  times 512 db 0
 mode_info_block: times 256 db 0

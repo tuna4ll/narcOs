@@ -140,6 +140,159 @@ static void vbe_memset_fast(void* dest, uint32_t color, uint32_t count_bytes) {
     }
 }
 
+static int vbe_is_frontbuffer(const uint8_t* buffer) {
+    return buffer && framebuffer && buffer == framebuffer;
+}
+
+static uint32_t vbe_mask_max(uint8_t bits) {
+    if (bits == 0U) return 0U;
+    if (bits >= 32U) return 0xFFFFFFFFU;
+    return (1U << bits) - 1U;
+}
+
+static int vbe_rgb_masks_valid(void) {
+    if (mode_info->red_mask == 0U || mode_info->green_mask == 0U || mode_info->blue_mask == 0U) return 0;
+    if ((uint32_t)mode_info->red_position + mode_info->red_mask > mode_info->bpp) return 0;
+    if ((uint32_t)mode_info->green_position + mode_info->green_mask > mode_info->bpp) return 0;
+    if ((uint32_t)mode_info->blue_position + mode_info->blue_mask > mode_info->bpp) return 0;
+    return mode_info->bpp <= 32U;
+}
+
+static uint32_t vbe_scale_u8_to_mask(uint32_t value, uint8_t bits) {
+    uint32_t max = vbe_mask_max(bits);
+    if (max == 0U) return 0U;
+    return (value * max + 127U) / 255U;
+}
+
+static uint32_t vbe_scale_mask_to_u8(uint32_t value, uint8_t bits) {
+    uint32_t max = vbe_mask_max(bits);
+    if (max == 0U) return 0U;
+    return (value * 255U + (max / 2U)) / max;
+}
+
+static uint32_t vbe_pack_rgb(uint32_t color) {
+    uint32_t r = (color >> 16) & 0xFFU;
+    uint32_t g = (color >> 8) & 0xFFU;
+    uint32_t b = color & 0xFFU;
+    uint32_t pixel;
+
+    if (vbe_rgb_masks_valid()) {
+        pixel = 0U;
+        pixel |= vbe_scale_u8_to_mask(r, mode_info->red_mask) << mode_info->red_position;
+        pixel |= vbe_scale_u8_to_mask(g, mode_info->green_mask) << mode_info->green_position;
+        pixel |= vbe_scale_u8_to_mask(b, mode_info->blue_mask) << mode_info->blue_position;
+        if (mode_info->rsv_mask != 0U &&
+            (uint32_t)mode_info->rsv_position + mode_info->rsv_mask <= mode_info->bpp) {
+            pixel |= vbe_mask_max(mode_info->rsv_mask) << mode_info->rsv_position;
+        }
+        return pixel;
+    }
+
+    if (mode_info->bpp == 16U) {
+        return ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+    }
+    return color & 0x00FFFFFFU;
+}
+
+static uint32_t vbe_unpack_rgb(uint32_t pixel) {
+    uint32_t r;
+    uint32_t g;
+    uint32_t b;
+
+    if (vbe_rgb_masks_valid()) {
+        r = vbe_scale_mask_to_u8((pixel >> mode_info->red_position) & vbe_mask_max(mode_info->red_mask),
+                                 mode_info->red_mask);
+        g = vbe_scale_mask_to_u8((pixel >> mode_info->green_position) & vbe_mask_max(mode_info->green_mask),
+                                 mode_info->green_mask);
+        b = vbe_scale_mask_to_u8((pixel >> mode_info->blue_position) & vbe_mask_max(mode_info->blue_mask),
+                                 mode_info->blue_mask);
+        return (r << 16) | (g << 8) | b;
+    }
+
+    if (mode_info->bpp == 16U) {
+        r = ((pixel >> 11) & 0x1FU) << 3;
+        g = ((pixel >> 5) & 0x3FU) << 2;
+        b = (pixel & 0x1FU) << 3;
+        return (r << 16) | (g << 8) | b;
+    }
+    return pixel & 0x00FFFFFFU;
+}
+
+static int vbe_frontbuffer_native_layout(void) {
+    if (!vbe_rgb_masks_valid()) return 1;
+    if (mode_info->bpp == 32U || mode_info->bpp == 24U) {
+        return mode_info->red_mask == 8U && mode_info->red_position == 16U &&
+               mode_info->green_mask == 8U && mode_info->green_position == 8U &&
+               mode_info->blue_mask == 8U && mode_info->blue_position == 0U;
+    }
+    if (mode_info->bpp == 16U) {
+        return mode_info->red_mask == 5U && mode_info->red_position == 11U &&
+               mode_info->green_mask == 6U && mode_info->green_position == 5U &&
+               mode_info->blue_mask == 5U && mode_info->blue_position == 0U;
+    }
+    return 1;
+}
+
+static int vbe_frontbuffer_needs_conversion(void) {
+    return !vbe_frontbuffer_native_layout();
+}
+
+static void vbe_store_rgb(uint8_t* dest, uint32_t color, int hardware_format) {
+    uint32_t pixel = hardware_format ? vbe_pack_rgb(color) : (color & 0x00FFFFFFU);
+    uint32_t bpp = mode_info->bpp / 8U;
+
+    if (bpp == 4U) {
+        *(uint32_t*)dest = pixel;
+    } else if (bpp == 3U) {
+        dest[0] = (uint8_t)(pixel & 0xFFU);
+        dest[1] = (uint8_t)((pixel >> 8) & 0xFFU);
+        dest[2] = (uint8_t)((pixel >> 16) & 0xFFU);
+    } else if (bpp == 2U) {
+        if (!hardware_format) {
+            uint32_t r = (color >> 16) & 0xFFU;
+            uint32_t g = (color >> 8) & 0xFFU;
+            uint32_t b = color & 0xFFU;
+            pixel = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+        }
+        *(uint16_t*)dest = (uint16_t)pixel;
+    }
+}
+
+static uint32_t vbe_load_rgb(const uint8_t* src, int hardware_format) {
+    uint32_t bpp = mode_info->bpp / 8U;
+    uint32_t pixel;
+
+    if (bpp == 4U) {
+        pixel = *(const uint32_t*)src;
+    } else if (bpp == 3U) {
+        pixel = (uint32_t)src[0] | ((uint32_t)src[1] << 8) | ((uint32_t)src[2] << 16);
+    } else if (bpp == 2U) {
+        pixel = *(const uint16_t*)src;
+    } else {
+        return 0U;
+    }
+    if (hardware_format) return vbe_unpack_rgb(pixel);
+    if (bpp == 2U) {
+        uint32_t r = ((pixel >> 11) & 0x1FU) << 3;
+        uint32_t g = ((pixel >> 5) & 0x3FU) << 2;
+        uint32_t b = (pixel & 0x1FU) << 3;
+        return (r << 16) | (g << 8) | b;
+    }
+    return pixel & 0x00FFFFFFU;
+}
+
+static void vbe_copy_row_to_frontbuffer(uint8_t* dest, const uint8_t* src, uint32_t pixels) {
+    uint32_t bpp = mode_info->bpp / 8U;
+
+    if (!vbe_frontbuffer_needs_conversion()) {
+        vbe_memcpy_fast(dest, src, pixels * bpp);
+        return;
+    }
+    for (uint32_t x = 0; x < pixels; x++) {
+        vbe_store_rgb(dest + (size_t)x * bpp, vbe_load_rgb(src + (size_t)x * bpp, 0), 1);
+    }
+}
+
 static int load_embedded_logo(embedded_ppm_t* out) {
     const uint8_t* start;
     const uint8_t* end;
@@ -217,10 +370,9 @@ static uint32_t vbe_get_pixel_from(uint8_t* buffer, uint32_t buf_width, int x, i
     if (!buffer || x < 0 || y < 0 || (uint32_t)x >= buf_width || (uint32_t)y >= mode_info->height) return 0;
     bpp_bytes = mode_info->bpp / 8;
     offset = (y * (int)buf_width + x) * (int)bpp_bytes;
-    if (bpp_bytes == 4U) return *(uint32_t*)(buffer + offset);
-    if (bpp_bytes == 3U) return ((uint32_t)buffer[offset + 2] << 16) |
-                                  ((uint32_t)buffer[offset + 1] << 8) |
-                                  (uint32_t)buffer[offset];
+    if (bpp_bytes == 4U || bpp_bytes == 3U || bpp_bytes == 2U) {
+        return vbe_load_rgb(buffer + offset, vbe_is_frontbuffer(buffer));
+    }
     return 0;
 }
 
@@ -386,6 +538,17 @@ static void vbe_draw_glyph_solid_32(int x, int y, const unsigned char* glyph, ui
     int end_col = UI_GLYPH_W + 1;
     int start_row = -1;
     int end_row = 9;
+
+    if (vbe_is_frontbuffer(current_target) && vbe_frontbuffer_needs_conversion()) {
+        for (int row = 0; row < 9; row++) {
+            for (int col = 0; col < UI_GLYPH_W + 1; col++) {
+                int alpha = vbe_glyph_alpha(glyph, row, col);
+                if (alpha >= 255) vbe_put_pixel(x + col, y + row, color);
+                else if (alpha > 0) vbe_put_pixel_alpha(x + col, y + row, color, alpha);
+            }
+        }
+        return;
+    }
 
     if (x < 0) start_col = -x;
     if (y < 0) start_row = -y;
@@ -570,15 +733,19 @@ void* vbe_get_backbuffer() { return backbuffer; }
 
 void vbe_update() {
     uint8_t* frontbuffer = vbe_frontbuffer();
+    uint32_t bpp_bytes;
+    uint32_t row_size;
 
     if (!frontbuffer) return;
-    uint32_t bpp_bytes = mode_info->bpp / 8;
-    uint32_t row_size = mode_info->width * bpp_bytes;
-    if (mode_info->pitch == row_size) {
+    bpp_bytes = mode_info->bpp / 8;
+    row_size = mode_info->width * bpp_bytes;
+    if (mode_info->pitch == row_size && !vbe_frontbuffer_needs_conversion()) {
         vbe_memcpy_fast(frontbuffer, backbuffer, mode_info->width * mode_info->height * bpp_bytes);
     } else {
         for(uint32_t y = 0; y < mode_info->height; y++) {
-            vbe_memcpy_fast(frontbuffer + y * mode_info->pitch, backbuffer + y * row_size, row_size);
+            vbe_copy_row_to_frontbuffer(frontbuffer + y * mode_info->pitch,
+                                        backbuffer + y * row_size,
+                                        mode_info->width);
         }
     }
 }
@@ -624,8 +791,20 @@ void init_vbe() {
     serial_write_hex32(mode_info->pitch);
     serial_write(" bpp=");
     serial_write_hex32(mode_info->bpp);
+    serial_write(" model=");
+    serial_write_hex32(mode_info->memory_model);
     serial_write(" fb=");
     serial_write_hex32(mode_info->framebuffer);
+    serial_write(" masks=");
+    serial_write_hex32(((uint32_t)mode_info->red_mask << 24) |
+                       ((uint32_t)mode_info->green_mask << 16) |
+                       ((uint32_t)mode_info->blue_mask << 8) |
+                       (uint32_t)mode_info->rsv_mask);
+    serial_write(" pos=");
+    serial_write_hex32(((uint32_t)mode_info->red_position << 24) |
+                       ((uint32_t)mode_info->green_position << 16) |
+                       ((uint32_t)mode_info->blue_position << 8) |
+                       (uint32_t)mode_info->rsv_position);
     serial_write_char('\n');
     if (mode_info->framebuffer && mode_info->width != 0 && mode_info->height != 0 && mode_info->pitch != 0) {
         framebuffer_size = (size_t)mode_info->pitch * (size_t)mode_info->height;
@@ -670,17 +849,8 @@ void vbe_put_pixel_to(uint8_t* buffer, uint32_t buf_width, int x, int y, uint32_
     if (x < 0 || (uint32_t)x >= buf_width || y < 0 || (uint32_t)y >= mode_info->height) return;
     uint32_t bpp_bytes = mode_info->bpp / 8;
     int offset = (y * buf_width + x) * bpp_bytes;
-    if (mode_info->bpp == 32) {
-        *(uint32_t*)(buffer + offset) = color;
-    } else if (mode_info->bpp == 24) {
-        buffer[offset]     = (color) & 0xFF;
-        buffer[offset + 1] = (color >> 8) & 0xFF;
-        buffer[offset + 2] = (color >> 16) & 0xFF;
-    } else if (mode_info->bpp == 16) {
-        uint16_t r = (color >> 16) & 0xFF;
-        uint16_t g = (color >> 8) & 0xFF;
-        uint16_t b = color & 0xFF;
-        *(uint16_t*)(buffer + offset) = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+    if (bpp_bytes == 4U || bpp_bytes == 3U || bpp_bytes == 2U) {
+        vbe_store_rgb(buffer + offset, color, vbe_is_frontbuffer(buffer));
     }
 }
 
@@ -688,16 +858,8 @@ uint32_t vbe_get_pixel(int x, int y) {
     if (x < 0 || (uint32_t)x >= current_target_width || y < 0 || (uint32_t)y >= current_target_height) return 0;
     uint32_t bpp_bytes = mode_info->bpp / 8;
     int offset = (y * current_target_width + x) * bpp_bytes;
-    if (mode_info->bpp == 32) {
-        return *(uint32_t*)(current_target + offset);
-    } else if (mode_info->bpp == 24) {
-        return (current_target[offset + 2] << 16) | (current_target[offset + 1] << 8) | current_target[offset];
-    } else if (mode_info->bpp == 16) {
-        uint16_t c = *(uint16_t*)(current_target + offset);
-        uint32_t r = ((c >> 11) & 0x1F) << 3;
-        uint32_t g = ((c >> 5) & 0x3F) << 2;
-        uint32_t b = (c & 0x1F) << 3;
-        return (r << 16) | (g << 8) | b;
+    if (bpp_bytes == 4U || bpp_bytes == 3U || bpp_bytes == 2U) {
+        return vbe_load_rgb(current_target + offset, vbe_is_frontbuffer(current_target));
     }
     return 0;
 }
@@ -1287,21 +1449,29 @@ void vbe_blit_window(window_t* win, uint8_t* win_buf, int is_focused) {
 void vbe_blit_rect(int x, int y, int w, int h, uint8_t* src_buf, uint32_t src_stride) {
     uint8_t* frontbuffer = vbe_frontbuffer();
     uint32_t bpp = mode_info->bpp / 8;
+    int convert;
 
     if (!frontbuffer) return;
+    convert = vbe_frontbuffer_needs_conversion();
     for (int i = 0; i < h; i++) {
         if (y + i < 0 || (uint32_t)(y + i) >= mode_info->height) continue;
         if (x < 0 || (uint32_t)x >= mode_info->width) continue;
         uint32_t draw_w = (x + w > (int)mode_info->width) ? (mode_info->width - x) : w;
         uint8_t* dest = frontbuffer + ((y + i) * mode_info->pitch + x * bpp);
         uint8_t* src  = src_buf + ((y + i) * src_stride + x) * bpp;
-        vbe_memcpy_fast(dest, src, draw_w * bpp);
+        if (convert) {
+            vbe_copy_row_to_frontbuffer(dest, src, draw_w);
+        } else {
+            vbe_memcpy_fast(dest, src, draw_w * bpp);
+        }
     }
 }
 
 void vbe_fill_rect(int x, int y, int w, int h, uint32_t color) {
     uint32_t bpp;
     uint64_t row_stride;
+    int hardware_format;
+    uint32_t fill_color;
 
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
@@ -1314,21 +1484,23 @@ void vbe_fill_rect(int x, int y, int w, int h, uint32_t color) {
     if (current_target_capacity == 0U || row_stride == 0ULL || row_stride > current_target_capacity) return;
     if ((((uint64_t)y * row_stride) + ((uint64_t)x * (uint64_t)bpp)) >= current_target_capacity) return;
 
+    hardware_format = vbe_is_frontbuffer(current_target);
+    fill_color = hardware_format ? vbe_pack_rgb(color) : (color & 0x00FFFFFFU);
     for (int i = 0; i < h; i++) {
         uint8_t* p = current_target + ((y + i) * current_target_width + x) * bpp;
         if (bpp == 4) {
-            vbe_memset_fast(p, color, (uint32_t)(w * 4));
+            vbe_memset_fast(p, fill_color, (uint32_t)(w * 4));
         } else {
             for (int j = 0; j < w; j++) {
-                p[j * 3]     = color & 0xFF;
-                p[j * 3 + 1] = (color >> 8) & 0xFF;
-                p[j * 3 + 2] = (color >> 16) & 0xFF;
+                vbe_store_rgb(p + (size_t)j * bpp, color, hardware_format);
             }
         }
     }
 }
 
 void vbe_fill_rect_alpha(int x, int y, int w, int h, uint32_t color, int alpha) {
+    int hardware_format;
+
     if (alpha <= 0) return;
     if (alpha >= 255) { vbe_fill_rect(x, y, w, h, color); return; }
     
@@ -1339,16 +1511,17 @@ void vbe_fill_rect_alpha(int x, int y, int w, int h, uint32_t color, int alpha) 
     if (w <= 0 || h <= 0) return;
 
     uint32_t bpp = mode_info->bpp / 8;
+    hardware_format = vbe_is_frontbuffer(current_target);
     for (int i = 0; i < h; i++) {
         uint8_t* p = current_target + ((y + i) * current_target_width + x) * bpp;
-        if (bpp == 4) {
+        if (bpp == 4 && !hardware_format) {
             vbe_alpha_blend_fast(p, color, (uint32_t)alpha, (uint32_t)w);
         } else {
             for (int j = 0; j < w; j++) {
-                uint32_t old = (p[2] << 16) | (p[1] << 8) | p[0];
+                uint32_t old = vbe_load_rgb(p, hardware_format);
                 uint32_t mixed = vbe_mix_color(color, old, alpha);
-                p[0] = mixed & 0xFF; p[1] = (mixed >> 8) & 0xFF; p[2] = (mixed >> 16) & 0xFF; 
-                p += 3;
+                vbe_store_rgb(p, mixed, hardware_format);
+                p += bpp;
             }
         }
     }
@@ -1562,7 +1735,7 @@ void vbe_fill_rect_gradient(int x, int y, int w, int h, uint32_t c1, uint32_t c2
     if (y + h > (int)current_target_height) h = (int)current_target_height - y;
     if (w <= 0 || h <= 0) return;
 
-    if (mode_info->bpp == 32) {
+    if (mode_info->bpp == 32 && !vbe_is_frontbuffer(current_target)) {
         if (vertical) {
             for (int i = 0; i < h; i++) {
                 int ratio = (i * 255) / h;

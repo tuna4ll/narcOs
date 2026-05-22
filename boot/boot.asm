@@ -8,6 +8,16 @@ STAGE2_LOAD_OFF equ 0x7E00
 %ifndef DISK_IMAGE_SECTORS
 %define DISK_IMAGE_SECTORS 49152
 %endif
+%ifndef DISK_BASE_LBA
+%define DISK_BASE_LBA 0
+%endif
+%ifndef PARTITION_START_LBA
+%define PARTITION_START_LBA 63
+%endif
+%ifndef PARTITION_SECTORS
+%define PARTITION_SECTORS (DISK_IMAGE_SECTORS - PARTITION_START_LBA)
+%endif
+BOOT_DISK_BASE_ADDR equ 0x7DF0
 start:
     cli
     xor ax, ax
@@ -23,7 +33,8 @@ start:
     call print
     call get_drive_geometry
 
-    mov dword [dap_lba_lo], 1
+    mov dword [BOOT_DISK_BASE_ADDR], DISK_BASE_LBA
+    mov dword [dap_lba_lo], DISK_BASE_LBA + 1
     mov dword [dap_lba_hi], 0
     mov word [dap_count], STAGE2_SECTORS
     mov word [dap_offset], STAGE2_LOAD_OFF
@@ -33,6 +44,10 @@ start:
     mov dl, [boot_drive]
     mov si, dap
     int 0x13
+    pushf
+    xor ax, ax
+    mov ds, ax
+    popf
     jnc .stage2_loaded
     call chs_read_stage2
     jc .disk_err
@@ -61,6 +76,10 @@ get_drive_geometry:
     mov ah, 0x08
     mov dl, [boot_drive]
     int 0x13
+    pushf
+    xor ax, ax
+    mov ds, ax
+    popf
     jc .done
     and cl, 0x3F
     jz .done
@@ -81,7 +100,7 @@ chs_read_stage2:
     push es
     xor ax, ax
     mov es, ax
-    mov word [chs_lba], 1
+    mov word [chs_lba], DISK_BASE_LBA + 1
     mov word [chs_dst], STAGE2_LOAD_OFF
     mov word [chs_left], STAGE2_SECTORS
 .loop:
@@ -128,6 +147,10 @@ chs_read_one:
     mov ax, 0x0201
     mov dl, [boot_drive]
     int 0x13
+    pushf
+    xor ax, ax
+    mov ds, ax
+    popf
     jc .err
     clc
     jmp .done
@@ -145,6 +168,7 @@ chs_lba     dw 0
 chs_dst     dw 0
 chs_left    dw 0
 chs_saved_bx dw 0
+align 4
 dap:
     db 0x10, 0x00
 dap_count:
@@ -165,7 +189,7 @@ times 446-($-$$) db 0
     db 0x01, 0x01, 0x00
     db 0x83
     db 0xFE, 0xFF, 0xFF
-    dd 63
-    dd DISK_IMAGE_SECTORS - 63
+    dd PARTITION_START_LBA
+    dd PARTITION_SECTORS
 times 510-($-$$) db 0
 dw 0xAA55

@@ -8,20 +8,249 @@ extern void vga_print_color(const char* str, uint8_t color);
 extern void vga_println(const char* str);
 extern void vga_print_int(int num);
 extern void vga_print_int_hex(uint32_t n, char* buf);
-#define DIR_SECTOR 2048
+#define DIR_SECTOR 3072
 #define DIR_SECTOR_COUNT 8
 #define DATA_START_SECTOR 4096
-#define DATA_END_SECTOR 20480
+#define DATA_END_SECTOR 6144
 #define FS_ROOT_INDEX (-1)
 #define FS_INVALID_INDEX (-2)
 #define FS_NODE_FLAG_EXTERNAL_BLOB 0x58424C42U
+#define NARCOS_BOOT_INFO_ADDR 0x7000U
+#define NARCOS_BOOT_INFO_MAGIC 0x4243524EU
+#define NARCOS_BOOT_INFO_VERSION_WITH_INITRD_ADDR 4U
+#define NARCOS_BOOT_INFO_INITRD_ADDR_SIZE 104U
+#define FS_BOOT_INITRD_MISS (-2)
 disk_fs_node_t dir_cache[MAX_FILES];
 uint8_t sector_buffer[512];
 int current_dir_index = -1;
+static int fs_ram_overlay_enabled = 0;
+static int fs_boot_info_cached = 0;
+
+typedef struct {
+    uint32_t magic;
+    uint16_t version;
+    uint16_t size;
+    uint32_t flags;
+    uint8_t boot_drive;
+    uint8_t profile;
+    uint16_t reserved;
+    uint32_t kernel_lba;
+    uint32_t kernel_sectors;
+    uint16_t vbe_mode;
+    uint16_t target_width;
+    uint16_t target_height;
+    uint16_t e820_count;
+    uint32_t framebuffer_addr;
+    uint32_t framebuffer_size;
+    uint32_t kernel_load_addr;
+    uint32_t kernel_load_size;
+    uint16_t fb_width;
+    uint16_t fb_height;
+    uint16_t fb_pitch;
+    uint8_t fb_bpp;
+    uint8_t fb_memory_model;
+    uint8_t red_mask;
+    uint8_t red_position;
+    uint8_t green_mask;
+    uint8_t green_position;
+    uint8_t blue_mask;
+    uint8_t blue_position;
+    uint8_t rsv_mask;
+    uint8_t rsv_position;
+    uint32_t e820_map_addr;
+    uint16_t e820_entry_size;
+    uint16_t boot_manifest_version;
+    uint32_t rsdp_addr;
+    uint32_t kernel_entry;
+    uint32_t kernel_crc32;
+    uint32_t initrd_lba;
+    uint32_t initrd_sectors;
+    uint32_t initrd_size;
+    uint32_t initrd_crc32;
+    uint32_t initrd_addr;
+} __attribute__((packed)) fs_boot_info_t;
+
+typedef struct fs_ram_overlay_sector {
+    uint32_t lba;
+    struct fs_ram_overlay_sector* next;
+    uint8_t data[512];
+} fs_ram_overlay_sector_t;
+
+static fs_ram_overlay_sector_t* fs_ram_overlay_head = 0;
+static fs_boot_info_t fs_boot_info_cache;
 
 static int fs_alloc_data_run(uint32_t sectors, int ignore_idx);
 static void fs_zero_sectors(uint32_t lba, uint32_t count);
 static int fs_find_node_internal(const char* path);
+
+static const fs_boot_info_t* fs_boot_info_get(void) {
+    const fs_boot_info_t* info = (const fs_boot_info_t*)(uintptr_t)NARCOS_BOOT_INFO_ADDR;
+
+    if (fs_boot_info_cached) return &fs_boot_info_cache;
+    if (info->magic != NARCOS_BOOT_INFO_MAGIC) return 0;
+    if (info->version < NARCOS_BOOT_INFO_VERSION_WITH_INITRD_ADDR) return 0;
+    if (info->size < NARCOS_BOOT_INFO_INITRD_ADDR_SIZE) return 0;
+    if (info->initrd_addr == 0U || info->initrd_lba == 0U || info->initrd_sectors == 0U) return 0;
+
+    fs_boot_info_cache = *info;
+    fs_boot_info_cached = 1;
+    serial_write("[fs] cached boot initrd lba=");
+    serial_write_hex32(fs_boot_info_cache.initrd_lba);
+    serial_write(" sectors=");
+    serial_write_hex32(fs_boot_info_cache.initrd_sectors);
+    serial_write(" addr=");
+    serial_write_hex32(fs_boot_info_cache.initrd_addr);
+    serial_write_char('\n');
+    return &fs_boot_info_cache;
+}
+
+static int fs_read_boot_initrd_blob(uint32_t src_lba, size_t len, void* buffer,
+                                    size_t offset, size_t max_len) {
+    const fs_boot_info_t* info;
+    uint8_t* bytes = (uint8_t*)buffer;
+    size_t read_len;
+    uint64_t initrd_capacity;
+    uint64_t blob_base;
+    uint64_t request_start;
+    uint64_t request_end;
+
+    if (!bytes && max_len != 0U) return -1;
+    if (src_lba == 0U || offset >= len || max_len == 0U) return 0;
+
+    info = fs_boot_info_get();
+    if (!info || src_lba < info->initrd_lba) return FS_BOOT_INITRD_MISS;
+
+    read_len = len - offset;
+    if (read_len > max_len) read_len = max_len;
+
+    initrd_capacity = (uint64_t)info->initrd_sectors * 512ULL;
+    blob_base = (uint64_t)(src_lba - info->initrd_lba) * 512ULL;
+    request_start = blob_base + (uint64_t)offset;
+    request_end = request_start + (uint64_t)read_len;
+    if (request_end < request_start || request_end > initrd_capacity) return FS_BOOT_INITRD_MISS;
+
+    memcpy(bytes, (const uint8_t*)(uintptr_t)info->initrd_addr + request_start, read_len);
+    return (int)read_len;
+}
+
+#if defined(NARCOS_DISK_DOOM_BIN) && defined(NARCOS_DISK_INITRD_LBA) && \
+    defined(NARCOS_DISK_INITRD_SIZE) && defined(NARCOS_DISK_INITRD_ADDR)
+static int fs_compiled_initrd_ready(void) {
+    static int ready = -1;
+    const uint8_t* bytes;
+
+    if (ready >= 0) return ready;
+    bytes = (const uint8_t*)(uintptr_t)NARCOS_DISK_INITRD_ADDR;
+    ready = NARCOS_DISK_DOOM_BIN_SIZE >= 4U &&
+            bytes[0] == 0x7FU && bytes[1] == 'E' &&
+            bytes[2] == 'L' && bytes[3] == 'F';
+    if (!ready) {
+        serial_write_line("[fs] initrd memory fallback unavailable");
+    }
+    return ready;
+}
+
+static int fs_read_compiled_initrd_blob(uint32_t src_lba, size_t len, void* buffer,
+                                        size_t offset, size_t max_len) {
+    uint8_t* bytes = (uint8_t*)buffer;
+    size_t read_len;
+    uint64_t blob_base;
+    uint64_t request_start;
+    uint64_t request_end;
+
+    if (!bytes && max_len != 0U) return -1;
+    if (src_lba == 0U || offset >= len || max_len == 0U) return 0;
+    if (!fs_compiled_initrd_ready()) return FS_BOOT_INITRD_MISS;
+    if (src_lba < (uint32_t)NARCOS_DISK_INITRD_LBA) return FS_BOOT_INITRD_MISS;
+
+    read_len = len - offset;
+    if (read_len > max_len) read_len = max_len;
+
+    blob_base = (uint64_t)(src_lba - (uint32_t)NARCOS_DISK_INITRD_LBA) * 512ULL;
+    request_start = blob_base + (uint64_t)offset;
+    request_end = request_start + (uint64_t)read_len;
+    if (request_end < request_start || request_end > (uint64_t)NARCOS_DISK_INITRD_SIZE) {
+        return FS_BOOT_INITRD_MISS;
+    }
+
+    memcpy(bytes, (const uint8_t*)(uintptr_t)NARCOS_DISK_INITRD_ADDR + request_start, read_len);
+    return (int)read_len;
+}
+#else
+static int fs_read_compiled_initrd_blob(uint32_t src_lba, size_t len, void* buffer,
+                                        size_t offset, size_t max_len) {
+    (void)src_lba;
+    (void)len;
+    (void)buffer;
+    (void)offset;
+    (void)max_len;
+    return FS_BOOT_INITRD_MISS;
+}
+#endif
+
+static int fs_ram_overlay_lba_allowed(uint32_t lba) {
+    if (lba >= DIR_SECTOR && lba < DIR_SECTOR + DIR_SECTOR_COUNT) {
+        return 1;
+    }
+    if (lba >= DATA_START_SECTOR && lba < DATA_END_SECTOR) {
+        return 1;
+    }
+    return 0;
+}
+
+static fs_ram_overlay_sector_t* fs_find_ram_overlay_sector(uint32_t lba) {
+    for (fs_ram_overlay_sector_t* sector = fs_ram_overlay_head; sector; sector = sector->next) {
+        if (sector->lba == lba) return sector;
+    }
+    return 0;
+}
+
+static fs_ram_overlay_sector_t* fs_get_ram_overlay_sector(uint32_t lba) {
+    fs_ram_overlay_sector_t* sector;
+
+    if (!fs_ram_overlay_lba_allowed(lba)) return 0;
+    sector = fs_find_ram_overlay_sector(lba);
+    if (sector) return sector;
+
+    sector = (fs_ram_overlay_sector_t*)malloc(sizeof(*sector));
+    if (!sector) return 0;
+    sector->lba = lba;
+    sector->next = fs_ram_overlay_head;
+    memset(sector->data, 0, sizeof(sector->data));
+    fs_ram_overlay_head = sector;
+    return sector;
+}
+
+static void fs_enable_ram_overlay(void) {
+    if (fs_ram_overlay_enabled) return;
+    fs_ram_overlay_enabled = 1;
+    serial_write_line("[fs] storage is not writable; using volatile RAM filesystem overlay");
+}
+
+static int fs_storage_read_sector(uint32_t lba, uint8_t* buffer) {
+    fs_ram_overlay_sector_t* sector;
+
+    if (!buffer) return -1;
+    sector = fs_find_ram_overlay_sector(lba);
+    if (sector) {
+        memcpy(buffer, sector->data, sizeof(sector->data));
+        return 0;
+    }
+    return storage_read_sector(lba, buffer);
+}
+
+static int fs_storage_write_sector(uint32_t lba, const uint8_t* buffer) {
+    fs_ram_overlay_sector_t* sector;
+
+    if (!buffer) return -1;
+    if (!fs_ram_overlay_enabled && storage_write_sector(lba, buffer) == 0) return 0;
+
+    fs_enable_ram_overlay();
+    sector = fs_get_ram_overlay_sector(lba);
+    if (!sector) return -1;
+    memcpy(sector->data, buffer, sizeof(sector->data));
+    return 0;
+}
 
 #define FS_DISTINCT_USER_PROGRAMS(X) \
     X(hello) \
@@ -221,9 +450,29 @@ static int fs_read_disk_blob(uint32_t src_lba, size_t len, void* buffer, size_t 
     uint32_t start_sector;
     size_t sector_offset;
     uint32_t sectors;
+    int initrd_status;
+    static int boot_initrd_logged = 0;
+    static int initrd_fallback_logged = 0;
 
     if (!bytes && max_len != 0U) return -1;
     if (src_lba == 0U || offset >= len || max_len == 0U) return 0;
+
+    initrd_status = fs_read_boot_initrd_blob(src_lba, len, buffer, offset, max_len);
+    if (initrd_status != FS_BOOT_INITRD_MISS) {
+        if (!boot_initrd_logged) {
+            serial_write_line("[fs] using boot initrd memory fallback");
+            boot_initrd_logged = 1;
+        }
+        return initrd_status;
+    }
+    initrd_status = fs_read_compiled_initrd_blob(src_lba, len, buffer, offset, max_len);
+    if (initrd_status != FS_BOOT_INITRD_MISS) {
+        if (!initrd_fallback_logged) {
+            serial_write_line("[fs] using initrd memory fallback");
+            initrd_fallback_logged = 1;
+        }
+        return initrd_status;
+    }
 
     read_len = len - offset;
     if (read_len > max_len) read_len = max_len;
@@ -234,7 +483,12 @@ static int fs_read_disk_blob(uint32_t src_lba, size_t len, void* buffer, size_t 
     for (uint32_t sector = start_sector; sector < sectors && copied < read_len; sector++) {
         size_t chunk;
 
-        if (storage_read_sector(src_lba + sector, sector_buffer) != 0) return -1;
+        if (fs_storage_read_sector(src_lba + sector, sector_buffer) != 0) {
+            serial_write("[fs] disk blob storage read failed lba=");
+            serial_write_hex32(src_lba + sector);
+            serial_write_char('\n');
+            return -1;
+        }
         chunk = 512U - sector_offset;
         if (chunk > read_len - copied) chunk = read_len - copied;
         memcpy(bytes + copied, sector_buffer + sector_offset, chunk);
@@ -355,11 +609,15 @@ static void fs_sync_disk_doom_binary(void) {
             uint32_t value = (uint32_t)magic[0] | ((uint32_t)magic[1] << 8) |
                              ((uint32_t)magic[2] << 16) | ((uint32_t)magic[3] << 24);
             char buf[11];
+            serial_write("[fs] /bin/doom magic=");
+            serial_write_hex32(value);
+            serial_write(value == 0x464C457FU ? " ELF\n" : " BAD\n");
             vga_print("[fs] /bin/doom magic=");
             vga_print_int_hex(value, buf);
             vga_print(buf);
             vga_println(value == 0x464C457FU ? " (ELF OK)" : " (BAD)");
         } else {
+            serial_write_line("[fs] /bin/doom magic read failed");
             vga_print_color("[fs] /bin/doom magic read failed\n", 0x0C);
         }
     }
@@ -540,18 +798,18 @@ static int fs_alloc_data_run(uint32_t sectors, int ignore_idx) {
 static void fs_zero_sectors(uint32_t lba, uint32_t count) {
     memset(sector_buffer, 0, sizeof(sector_buffer));
     for (uint32_t i = 0; i < count; i++) {
-        (void)storage_write_sector(lba + i, sector_buffer);
+        (void)fs_storage_write_sector(lba + i, sector_buffer);
     }
 }
 
 void fs_sync() {
     for (int i = 0; i < DIR_SECTOR_COUNT; i++) {
-        (void)storage_write_sector(DIR_SECTOR + (uint32_t)i, (uint8_t*)dir_cache + (i * 512));
+        (void)fs_storage_write_sector(DIR_SECTOR + (uint32_t)i, (uint8_t*)dir_cache + (i * 512));
     }
 }
 static void load_dir_cache() {
     for (int i = 0; i < DIR_SECTOR_COUNT; i++) {
-        if (storage_read_sector(DIR_SECTOR + (uint32_t)i, (uint8_t*)dir_cache + (i * 512)) != 0) {
+        if (fs_storage_read_sector(DIR_SECTOR + (uint32_t)i, (uint8_t*)dir_cache + (i * 512)) != 0) {
             memset((uint8_t*)dir_cache + (i * 512), 0, 512);
         }
     }
@@ -721,7 +979,7 @@ int fs_write_file_raw_by_idx(int idx, const void* data, size_t len) {
         if (chunk > 512U) chunk = 512U;
         memset(sector_buffer, 0, sizeof(sector_buffer));
         memcpy(sector_buffer, bytes + offset, chunk);
-        if (storage_write_sector(dir_cache[idx].lba + sector, sector_buffer) != 0) return -1;
+        if (fs_storage_write_sector(dir_cache[idx].lba + sector, sector_buffer) != 0) return -1;
     }
     if (current_sectors > needed_sectors && dir_cache[idx].lba != 0) {
         fs_zero_sectors(dir_cache[idx].lba + needed_sectors, current_sectors - needed_sectors);
@@ -810,7 +1068,7 @@ int fs_read_file_raw_by_idx(int idx, void* buffer, size_t offset, size_t max_len
     for (uint32_t sector = start_sector; sector < sectors && copied < read_len; sector++) {
         size_t chunk;
 
-        if (storage_read_sector(dir_cache[idx].lba + sector, sector_buffer) != 0) return -1;
+        if (fs_storage_read_sector(dir_cache[idx].lba + sector, sector_buffer) != 0) return -1;
         chunk = 512U - sector_offset;
         if (chunk > read_len - copied) chunk = read_len - copied;
         memcpy(bytes + copied, sector_buffer + sector_offset, chunk);

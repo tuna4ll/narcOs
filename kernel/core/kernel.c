@@ -68,7 +68,7 @@ static kernel_pipe_test_state_t kernel_pipe_test_state;
 #define DESKTOP_OPEN_PATH_MAX 256U
 #define NARCOS_BOOT_INFO_ADDR 0x7000U
 #define NARCOS_BOOT_INFO_MAGIC 0x4243524EU
-#define NARCOS_BOOT_INFO_VERSION_MAX 3U
+#define NARCOS_BOOT_INFO_VERSION_MAX 4U
 #define NARCOS_BOOT_INFO_MIN_SIZE 32U
 #define NARCOS_BOOT_FLAG_GRAPHICS 0x00000001U
 #define NARCOS_BOOT_FLAG_SAFE_TEXT 0x00000002U
@@ -117,6 +117,7 @@ typedef struct {
     uint32_t initrd_sectors;
     uint32_t initrd_size;
     uint32_t initrd_crc32;
+    uint32_t initrd_addr;
 } __attribute__((packed)) narcos_boot_info_t;
 
 window_t windows[MAX_WINDOWS];
@@ -1526,6 +1527,10 @@ static void boot_log_info_handoff(void) {
         serial_write_hex32(info->initrd_size);
         serial_write(" crc=");
         serial_write_hex32(info->initrd_crc32);
+        if (info->size >= sizeof(narcos_boot_info_t)) {
+            serial_write(" addr=");
+            serial_write_hex32(info->initrd_addr);
+        }
         serial_write_char('\n');
     }
 }
@@ -2486,6 +2491,8 @@ void kmain() {
     usermode_debug_dump("post-usermode");
     init_keyboard();
     usermode_debug_dump("post-kbd");
+    init_heap();
+    usermode_debug_dump("post-heap");
     storage_init();
     usermode_debug_dump("post-storage");
     init_fs();
@@ -2494,8 +2501,6 @@ void kmain() {
     rtc_init_timezone();
     read_rtc();
     usermode_debug_dump("post-rtc");
-    init_heap();
-    usermode_debug_dump("post-heap");
     screen_set_graphics_enabled(0);
     if (boot_framebuffer_available()) {
         serial_write_line("[boot] init_vbe");

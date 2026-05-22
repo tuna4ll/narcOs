@@ -16,7 +16,7 @@ static uint32_t storage_volume_base = 0;
 static storage_partition_info_t storage_partitions[8];
 static int storage_partition_total = 0;
 
-#define STORAGE_DIR_SECTOR        2048U
+#define STORAGE_DIR_SECTOR        3072U
 #define STORAGE_DIR_SECTOR_COUNT  8U
 #define STORAGE_MBR_SIGNATURE     0xAA55U
 #define STORAGE_GPT_ENTRY_SIZE    128U
@@ -90,11 +90,7 @@ static int storage_bytes_equal(const uint8_t* a, const uint8_t* b, uint32_t len)
 }
 
 static uint32_t storage_effective_volume_base(void) {
-#if UINTPTR_MAX > 0xFFFFFFFFU
-    return 0U;
-#else
     return storage_volume_base;
-#endif
 }
 
 static void storage_print_hex16(uint16_t value) {

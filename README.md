@@ -33,6 +33,18 @@ make iso-i386
 make run-iso-i386
 ```
 
+Test the same ISO as a Rufus/DD USB image in QEMU:
+
+```bash
+make run-iso-usb-i386
+```
+
+Build a 32-bit raw disk image explicitly:
+
+```bash
+make usb-i386
+```
+
 ## Run 64-bit
 
 ```bash
@@ -51,6 +63,28 @@ Build and boot the 64-bit ISO:
 make iso-x86_64
 make run-iso-x86_64
 ```
+
+Test the same ISO as a Rufus/DD USB image in QEMU:
+
+```bash
+make run-iso-usb-x86_64
+```
+
+Build a 64-bit raw disk image explicitly:
+
+```bash
+make usb-x86_64
+```
+
+The ISO targets are hybrid images. They still boot as CD-ROM images in a VM,
+but the same `.iso` can also be written directly to a USB drive with Rufus or
+`dd`. If Rufus asks for write mode, choose `DD Image mode`. CD-ROM boot is
+read-only and uses a volatile RAM filesystem overlay;
+USB boot through Rufus/DD exposes the embedded NarcOs disk image as a writable
+partition, so filesystem writes persist on the USB drive.
+
+Current boot support is BIOS/legacy or UEFI-CSM. UEFI-only boot requires an EFI
+bootloader and is not supported by this image yet.
 
 ## Clean
 

@@ -4,14 +4,17 @@ CC = gcc
 LD = ld
 AS = nasm
 OBJCOPY = objcopy
+HYBRID_ISO_TOOL = tools/make_rufus_hybrid.py
+FS_SEED_TOOL = tools/seed_narcos_fs.py
+BOOT_MANIFEST_TOOL = tools/make_boot_manifest.py
 
 OBJ_DIR  = obj
 BOOT_DIR = boot
 KERN_DIR = kernel
 USER_DIR = user
 ASSET_DIR = assets
-VBE_WIDTH ?= 1920
-VBE_HEIGHT ?= 1080
+VBE_WIDTH ?= 1024
+VBE_HEIGHT ?= 768
 BOOT_MANIFEST_LBA = 17
 KERNEL_START_LBA = 18
 DISK_IMAGE_SECTORS = 49152
@@ -21,12 +24,11 @@ USER_PROGRAMS = hello ps cat echo kill proc_test pipe_test credits neofetch desk
 USER_EMBED_PROGRAMS = $(filter-out doom,$(USER_PROGRAMS))
 USER_PROGRAM_HEADERS = $(shell find $(USER_DIR)/programs -name '*.h' 2>/dev/null)
 DOOM1_WAD = $(wildcard $(DOOM_PORT_DIR)/doom1.wad)
-DOOM_BIN_LBA = 20480
+DOOM_BIN_LBA = 8192
 DOOM_BIN_MAX_SIZE = 1048576
-DOOM1_WAD_LBA = 22528
 DOOM1_WAD_MAX_SIZE = 4489216
 DOOM1_WAD_SIZE = $(if $(DOOM1_WAD),$(shell wc -c < $(DOOM1_WAD)),0)
-DOOM1_WAD_CFLAGS = $(if $(DOOM1_WAD),-DNARCOS_DISK_DOOM1_WAD=1 -DNARCOS_DISK_DOOM1_WAD_LBA=$(DOOM1_WAD_LBA) -DNARCOS_DISK_DOOM1_WAD_SIZE=$(DOOM1_WAD_SIZE),)
+DOOM1_WAD_SECTORS = $(if $(DOOM1_WAD),$(shell echo $$(( ($(DOOM1_WAD_SIZE) + 511) / 512 ))),0)
 USER_TLS_PROGRAMS = tls_tools
 USER_TLS_SOURCES = \
 	$(KERN_DIR)/apps/user_tls.c \
@@ -96,7 +98,14 @@ I386_DESKTOP_ASSET_BG_OBJECT = $(I386_OBJ_DIR)/user/assets/desktop_bg.o
 I386_USER_CRT_OBJECT = $(I386_OBJ_DIR)/user/crt0.o
 I386_DOOM_BINARY = $(I386_OBJ_DIR)/user/bin/doom
 I386_DOOM_BIN_SIZE = $(shell test -f $(I386_DOOM_BINARY) && wc -c < $(I386_DOOM_BINARY) || echo 0)
-I386_DISK_PAYLOAD_CFLAGS = -DNARCOS_DISK_DOOM_BIN=1 -DNARCOS_DISK_DOOM_BIN_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_DOOM_BIN_SIZE=$(I386_DOOM_BIN_SIZE) $(DOOM1_WAD_CFLAGS)
+I386_DOOM_BIN_SECTORS = $(shell test -f $(I386_DOOM_BINARY) && echo $$(( ($$(wc -c < $(I386_DOOM_BINARY)) + 511) / 512 )) || echo 0)
+I386_DOOM1_WAD_LBA = $(shell echo $$(( $(DOOM_BIN_LBA) + $(I386_DOOM_BIN_SECTORS) )))
+I386_DOOM1_WAD_END_LBA = $(shell echo $$(( $(I386_DOOM1_WAD_LBA) + $(DOOM1_WAD_SECTORS) )))
+I386_INITRD_END_LBA = $(shell doom_end=$$(( $(DOOM_BIN_LBA) + $(I386_DOOM_BIN_SECTORS) )); end=$$doom_end; wad_secs=$(DOOM1_WAD_SECTORS); if [ $$wad_secs -gt 0 ]; then wad_end=$(I386_DOOM1_WAD_END_LBA); if [ $$wad_end -gt $$end ]; then end=$$wad_end; fi; fi; echo $$end)
+I386_INITRD_SECTORS = $(shell end=$(I386_INITRD_END_LBA); if [ $$end -gt $(DOOM_BIN_LBA) ]; then echo $$(( $$end - $(DOOM_BIN_LBA) )); else echo 0; fi)
+I386_INITRD_SIZE = $(shell echo $$(( $(I386_INITRD_SECTORS) * 512 )))
+I386_DOOM1_WAD_CFLAGS = $(if $(DOOM1_WAD),-DNARCOS_DISK_DOOM1_WAD=1 -DNARCOS_DISK_DOOM1_WAD_LBA=$(I386_DOOM1_WAD_LBA) -DNARCOS_DISK_DOOM1_WAD_SIZE=$(DOOM1_WAD_SIZE),)
+I386_DISK_PAYLOAD_CFLAGS = -DNARCOS_DISK_DOOM_BIN=1 -DNARCOS_DISK_DOOM_BIN_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_DOOM_BIN_SIZE=$(I386_DOOM_BIN_SIZE) -DNARCOS_DISK_INITRD_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_INITRD_SIZE=$(I386_INITRD_SIZE) -DNARCOS_DISK_INITRD_ADDR=0x00A00000 $(I386_DOOM1_WAD_CFLAGS)
 I386_KERNEL_OBJECTS = $(I386_ASM_OBJECTS) $(I386_C_OBJECTS) $(I386_USER_EMBED_OBJECTS) $(I386_ASSET_BG_OBJECT) $(I386_ASSET_LOGO_OBJECT)
 I386_BOOT_BIN = $(I386_OBJ_DIR)/boot/boot.bin
 I386_STAGE2_BIN = $(I386_OBJ_DIR)/boot/stage2.bin
@@ -106,6 +115,7 @@ I386_KERNEL_BIN = $(I386_OBJ_DIR)/kernel.bin
 I386_IMAGE = $(I386_OBJ_DIR)/minios.img
 I386_ISO_ROOT = $(I386_OBJ_DIR)/iso
 I386_ISO = $(I386_OBJ_DIR)/narcos-i386.iso
+I386_USB_IMAGE = $(I386_OBJ_DIR)/narcos-i386-usb.img
 
 X86_64_OBJ_DIR = $(OBJ_DIR)/x86_64
 X86_64_CFLAGS = -m64 $(COMMON_CFLAGS) -I$(KERN_DIR)/arch/x86_64 $(KERNEL_INCLUDE_FLAGS) -mno-red-zone -mgeneral-regs-only -mno-mmx -mno-sse -mno-sse2 -msoft-float -O2 -fomit-frame-pointer
@@ -158,7 +168,14 @@ X86_64_DESKTOP_ASSET_BG_OBJECT = $(X86_64_OBJ_DIR)/user/assets/desktop_bg.o
 X86_64_USER_CRT_OBJECT = $(X86_64_OBJ_DIR)/user/crt0_x86_64.o
 X86_64_DOOM_BINARY = $(X86_64_OBJ_DIR)/user/bin/doom
 X86_64_DOOM_BIN_SIZE = $(shell test -f $(X86_64_DOOM_BINARY) && wc -c < $(X86_64_DOOM_BINARY) || echo 0)
-X86_64_DISK_PAYLOAD_CFLAGS = -DNARCOS_DISK_DOOM_BIN=1 -DNARCOS_DISK_DOOM_BIN_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_DOOM_BIN_SIZE=$(X86_64_DOOM_BIN_SIZE) $(DOOM1_WAD_CFLAGS)
+X86_64_DOOM_BIN_SECTORS = $(shell test -f $(X86_64_DOOM_BINARY) && echo $$(( ($$(wc -c < $(X86_64_DOOM_BINARY)) + 511) / 512 )) || echo 0)
+X86_64_DOOM1_WAD_LBA = $(shell echo $$(( $(DOOM_BIN_LBA) + $(X86_64_DOOM_BIN_SECTORS) )))
+X86_64_DOOM1_WAD_END_LBA = $(shell echo $$(( $(X86_64_DOOM1_WAD_LBA) + $(DOOM1_WAD_SECTORS) )))
+X86_64_INITRD_END_LBA = $(shell doom_end=$$(( $(DOOM_BIN_LBA) + $(X86_64_DOOM_BIN_SECTORS) )); end=$$doom_end; wad_secs=$(DOOM1_WAD_SECTORS); if [ $$wad_secs -gt 0 ]; then wad_end=$(X86_64_DOOM1_WAD_END_LBA); if [ $$wad_end -gt $$end ]; then end=$$wad_end; fi; fi; echo $$end)
+X86_64_INITRD_SECTORS = $(shell end=$(X86_64_INITRD_END_LBA); if [ $$end -gt $(DOOM_BIN_LBA) ]; then echo $$(( $$end - $(DOOM_BIN_LBA) )); else echo 0; fi)
+X86_64_INITRD_SIZE = $(shell echo $$(( $(X86_64_INITRD_SECTORS) * 512 )))
+X86_64_DOOM1_WAD_CFLAGS = $(if $(DOOM1_WAD),-DNARCOS_DISK_DOOM1_WAD=1 -DNARCOS_DISK_DOOM1_WAD_LBA=$(X86_64_DOOM1_WAD_LBA) -DNARCOS_DISK_DOOM1_WAD_SIZE=$(DOOM1_WAD_SIZE),)
+X86_64_DISK_PAYLOAD_CFLAGS = -DNARCOS_DISK_DOOM_BIN=1 -DNARCOS_DISK_DOOM_BIN_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_DOOM_BIN_SIZE=$(X86_64_DOOM_BIN_SIZE) -DNARCOS_DISK_INITRD_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_INITRD_SIZE=$(X86_64_INITRD_SIZE) -DNARCOS_DISK_INITRD_ADDR=0x00A00000 $(X86_64_DOOM1_WAD_CFLAGS)
 X86_64_KERNEL_OBJECTS = $(X86_64_ASM_OBJECTS) $(X86_64_C_OBJECTS) $(X86_64_USER_EMBED_OBJECTS) $(X86_64_ASSET_BG_OBJECT) $(X86_64_ASSET_LOGO_OBJECT)
 X86_64_KERNEL_ELF = $(X86_64_OBJ_DIR)/kernel64.elf
 X86_64_KERNEL_BIN = $(X86_64_OBJ_DIR)/kernel64.bin
@@ -168,12 +185,13 @@ X86_64_BOOT_MANIFEST_BIN = $(X86_64_OBJ_DIR)/boot/manifest.bin
 X86_64_IMAGE = $(X86_64_OBJ_DIR)/minios64.img
 X86_64_ISO_ROOT = $(X86_64_OBJ_DIR)/iso
 X86_64_ISO = $(X86_64_OBJ_DIR)/narcos-x86_64.iso
+X86_64_USB_IMAGE = $(X86_64_OBJ_DIR)/narcos-x86_64-usb.img
 
 # Windows (MinGW) 'ld -o raw_binary_file' seklinde tam duz ciktivermeyebilir
 # Buna objcopy destek cikar (Fakat biz PE-O yapisindan objcopy cekecegiz)
 # Eger minios.img boyutu sacmalarsa LDFLAGS uzerinden --oformat binary zorlanabilir.
 
-.PHONY: all all-i386 all-x86_64 clean export-i386-artifacts iso iso-i386 iso-x86_64 pre-build run-i386 run-iso-i386 run-iso-x86_64 run-net run-net-i386 run-x86_64 run-x86_64-gui run-x86_64-headless run-x86_64-net user-programs user-programs-i386 user-programs-x86_64
+.PHONY: all all-i386 all-x86_64 clean export-i386-artifacts iso iso-i386 iso-x86_64 pre-build run-i386 run-iso-i386 run-iso-usb-i386 run-iso-usb-x86_64 run-iso-x86_64 run-net run-net-i386 run-x86_64 run-x86_64-gui run-x86_64-headless run-x86_64-net usb usb-i386 usb-x86_64 user-programs user-programs-i386 user-programs-x86_64
 .SECONDARY: $(I386_USER_BINARIES) $(X86_64_USER_BINARIES) $(I386_KERNEL_ELF) $(X86_64_KERNEL_ELF)
 
 all: all-i386 export-i386-artifacts
@@ -187,6 +205,12 @@ iso: iso-i386
 iso-i386: pre-build $(I386_ISO)
 
 iso-x86_64: pre-build $(X86_64_ISO)
+
+usb: usb-i386
+
+usb-i386: pre-build $(I386_USB_IMAGE)
+
+usb-x86_64: pre-build $(X86_64_USB_IMAGE)
 
 user-programs: user-programs-i386
 
@@ -310,12 +334,12 @@ $(I386_KERNEL_BIN): $(I386_KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
 	@echo "[OK] i386 raw kernel: $@ ($$(wc -c < $@) byte)"
 
-$(I386_BOOT_MANIFEST_BIN): $(I386_KERNEL_ELF)
+$(I386_BOOT_MANIFEST_BIN): $(I386_KERNEL_ELF) $(I386_DOOM_BINARY) $(DOOM1_WAD) $(BOOT_MANIFEST_TOOL)
 	@mkdir -p $(dir $@)
-	python3 -c 'import struct, sys, zlib; src, dst, lba = sys.argv[1], sys.argv[2], int(sys.argv[3]); data = open(src, "rb").read(); sectors = (len(data) + 511) // 512; buf = bytearray(512); struct.pack_into("<IHHIIIIIIIII", buf, 0, 0x4D43524E, 1, 64, 0, lba, sectors, len(data), zlib.crc32(data) & 0xFFFFFFFF, 0, 0, 0, 0); open(dst, "wb").write(buf)' $< $@ $(KERNEL_START_LBA)
+	python3 $(BOOT_MANIFEST_TOOL) $< $@ $(KERNEL_START_LBA) --initrd-lba $(DOOM_BIN_LBA) --initrd-sectors $(I386_INITRD_SECTORS) --initrd-size $(I386_INITRD_SIZE)
 	@echo "[OK] i386 boot manifest: $@"
 
-$(I386_IMAGE): $(I386_BOOT_BIN) $(I386_STAGE2_BIN) $(I386_BOOT_MANIFEST_BIN) $(I386_KERNEL_ELF) $(I386_DOOM_BINARY)
+$(I386_IMAGE): $(I386_BOOT_BIN) $(I386_STAGE2_BIN) $(I386_BOOT_MANIFEST_BIN) $(I386_KERNEL_ELF) $(I386_DOOM_BINARY) $(FS_SEED_TOOL)
 	@mkdir -p $(dir $@)
 	$(eval KERNEL_SECS := $(shell echo $$(( ($$(wc -c < $(I386_KERNEL_ELF)) + 511) / 512 ))))
 	@echo "[INFO] i386 kernel sector size: $(KERNEL_SECS)"
@@ -327,7 +351,8 @@ $(I386_IMAGE): $(I386_BOOT_BIN) $(I386_STAGE2_BIN) $(I386_BOOT_MANIFEST_BIN) $(I
 	@test $(I386_DOOM_BIN_SIZE) -le $(DOOM_BIN_MAX_SIZE) || (echo "[ERR] i386 doom binary too large for payload slot: $(I386_DOOM_BIN_SIZE) > $(DOOM_BIN_MAX_SIZE)" && exit 1)
 	dd if=$(I386_DOOM_BINARY) of=$@ bs=512 seek=$(DOOM_BIN_LBA) conv=notrunc 2>/dev/null
 	$(if $(DOOM1_WAD),@test $(DOOM1_WAD_SIZE) -le $(DOOM1_WAD_MAX_SIZE) || (echo "[ERR] $(DOOM1_WAD) too large for payload slot: $(DOOM1_WAD_SIZE) > $(DOOM1_WAD_MAX_SIZE)" && exit 1),)
-	$(if $(DOOM1_WAD),dd if=$(DOOM1_WAD) of=$@ bs=512 seek=$(DOOM1_WAD_LBA) conv=notrunc 2>/dev/null,)
+	$(if $(DOOM1_WAD),dd if=$(DOOM1_WAD) of=$@ bs=512 seek=$(I386_DOOM1_WAD_LBA) conv=notrunc 2>/dev/null,)
+	python3 $(FS_SEED_TOOL) $@
 	@echo "[OK] i386 image: $@"
 
 $(I386_ISO): $(I386_IMAGE)
@@ -337,7 +362,12 @@ $(I386_ISO): $(I386_IMAGE)
 	cp $(I386_IMAGE) $(I386_ISO_ROOT)/boot/minios.img
 	printf "NarcOs i386 bootable ISO\nBoot image: /boot/minios.img\n" > $(I386_ISO_ROOT)/README.TXT
 	genisoimage -quiet -V NARCOS_I386 -b boot/minios.img -c boot/boot.cat -hard-disk-boot -o $@ $(I386_ISO_ROOT)
-	@echo "[OK] i386 ISO: $@"
+	python3 $(HYBRID_ISO_TOOL) --iso $@ --boot-asm $(BOOT_DIR)/boot.asm --disk-image-sectors $(DISK_IMAGE_SECTORS) --nasm $(AS)
+	@echo "[OK] i386 Rufus/DD hybrid ISO: $@"
+
+$(I386_USB_IMAGE): $(I386_IMAGE)
+	cp $< $@
+	@echo "[OK] i386 USB/raw image: $@"
 
 $(X86_64_OBJ_DIR)/%.o: $(KERN_DIR)/%.c
 	@mkdir -p $(dir $@)
@@ -443,12 +473,12 @@ $(X86_64_BOOT_BIN): $(BOOT_DIR)/boot.asm $(X86_64_STAGE2_BIN)
 	@test $(STAGE2_SECS) -le 16 || (echo "[ERR] x86_64 stage2 too large for manifest layout: $(STAGE2_SECS) sectors > 16" && exit 1)
 	$(AS) -DSTAGE2_SECTORS=$(STAGE2_SECS) -DDISK_IMAGE_SECTORS=$(DISK_IMAGE_SECTORS) -f bin $< -o $@
 
-$(X86_64_BOOT_MANIFEST_BIN): $(X86_64_KERNEL_ELF)
+$(X86_64_BOOT_MANIFEST_BIN): $(X86_64_KERNEL_ELF) $(X86_64_DOOM_BINARY) $(DOOM1_WAD) $(BOOT_MANIFEST_TOOL)
 	@mkdir -p $(dir $@)
-	python3 -c 'import struct, sys, zlib; src, dst, lba = sys.argv[1], sys.argv[2], int(sys.argv[3]); data = open(src, "rb").read(); sectors = (len(data) + 511) // 512; buf = bytearray(512); struct.pack_into("<IHHIIIIIIIII", buf, 0, 0x4D43524E, 1, 64, 0, lba, sectors, len(data), zlib.crc32(data) & 0xFFFFFFFF, 0, 0, 0, 0); open(dst, "wb").write(buf)' $< $@ $(KERNEL_START_LBA)
+	python3 $(BOOT_MANIFEST_TOOL) $< $@ $(KERNEL_START_LBA) --initrd-lba $(DOOM_BIN_LBA) --initrd-sectors $(X86_64_INITRD_SECTORS) --initrd-size $(X86_64_INITRD_SIZE)
 	@echo "[OK] x86_64 boot manifest: $@"
 
-$(X86_64_IMAGE): $(X86_64_BOOT_BIN) $(X86_64_STAGE2_BIN) $(X86_64_BOOT_MANIFEST_BIN) $(X86_64_KERNEL_ELF) $(X86_64_DOOM_BINARY)
+$(X86_64_IMAGE): $(X86_64_BOOT_BIN) $(X86_64_STAGE2_BIN) $(X86_64_BOOT_MANIFEST_BIN) $(X86_64_KERNEL_ELF) $(X86_64_DOOM_BINARY) $(FS_SEED_TOOL)
 	@mkdir -p $(dir $@)
 	dd if=/dev/zero of=$@ bs=512 count=$(DISK_IMAGE_SECTORS) 2>/dev/null
 	dd if=$(X86_64_BOOT_BIN) of=$@ bs=512 seek=0 conv=notrunc 2>/dev/null
@@ -458,7 +488,8 @@ $(X86_64_IMAGE): $(X86_64_BOOT_BIN) $(X86_64_STAGE2_BIN) $(X86_64_BOOT_MANIFEST_
 	@test $(X86_64_DOOM_BIN_SIZE) -le $(DOOM_BIN_MAX_SIZE) || (echo "[ERR] x86_64 doom binary too large for payload slot: $(X86_64_DOOM_BIN_SIZE) > $(DOOM_BIN_MAX_SIZE)" && exit 1)
 	dd if=$(X86_64_DOOM_BINARY) of=$@ bs=512 seek=$(DOOM_BIN_LBA) conv=notrunc 2>/dev/null
 	$(if $(DOOM1_WAD),@test $(DOOM1_WAD_SIZE) -le $(DOOM1_WAD_MAX_SIZE) || (echo "[ERR] $(DOOM1_WAD) too large for payload slot: $(DOOM1_WAD_SIZE) > $(DOOM1_WAD_MAX_SIZE)" && exit 1),)
-	$(if $(DOOM1_WAD),dd if=$(DOOM1_WAD) of=$@ bs=512 seek=$(DOOM1_WAD_LBA) conv=notrunc 2>/dev/null,)
+	$(if $(DOOM1_WAD),dd if=$(DOOM1_WAD) of=$@ bs=512 seek=$(X86_64_DOOM1_WAD_LBA) conv=notrunc 2>/dev/null,)
+	python3 $(FS_SEED_TOOL) $@
 	@echo "[OK] x86_64 image: $@"
 
 $(X86_64_ISO): $(X86_64_IMAGE)
@@ -468,7 +499,12 @@ $(X86_64_ISO): $(X86_64_IMAGE)
 	cp $(X86_64_IMAGE) $(X86_64_ISO_ROOT)/boot/minios64.img
 	printf "NarcOs x86_64 bootable ISO\nBoot image: /boot/minios64.img\n" > $(X86_64_ISO_ROOT)/README.TXT
 	genisoimage -quiet -V NARCOS_X86_64 -b boot/minios64.img -c boot/boot.cat -hard-disk-boot -o $@ $(X86_64_ISO_ROOT)
-	@echo "[OK] x86_64 ISO: $@"
+	python3 $(HYBRID_ISO_TOOL) --iso $@ --boot-asm $(BOOT_DIR)/boot.asm --disk-image-sectors $(DISK_IMAGE_SECTORS) --nasm $(AS)
+	@echo "[OK] x86_64 Rufus/DD hybrid ISO: $@"
+
+$(X86_64_USB_IMAGE): $(X86_64_IMAGE)
+	cp $< $@
+	@echo "[OK] x86_64 USB/raw image: $@"
 
 clean:
 	rm -rf $(OBJ_DIR) $(BOOT_DIR)/*.bin *.img kernel.bin kernel.elf kernel64.elf kernel64.bin kernel.tmp
@@ -478,6 +514,9 @@ run-i386: all-i386
 
 run-iso-i386: iso-i386
 	qemu-system-i386 -m 128M -cdrom $(I386_ISO) -boot d -serial stdio -no-reboot -no-shutdown
+
+run-iso-usb-i386: iso-i386
+	qemu-system-i386 -m 128M -drive format=raw,file=$(I386_ISO) -serial stdio -no-reboot -no-shutdown
 
 run-net-i386: all-i386
 	qemu-system-i386 -m 128M -drive format=raw,file=$(I386_IMAGE) -serial stdio -netdev user,id=n0 -device rtl8139,netdev=n0 -no-reboot -no-shutdown
@@ -491,6 +530,9 @@ run-x86_64-headless: all-x86_64
 
 run-iso-x86_64: iso-x86_64
 	qemu-system-x86_64 -m 128M -cdrom $(X86_64_ISO) -boot d -serial stdio -display none -no-reboot -no-shutdown
+
+run-iso-usb-x86_64: iso-x86_64
+	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_ISO) -serial stdio -display none -no-reboot -no-shutdown
 
 run-x86_64-gui: all-x86_64
 	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -no-reboot -no-shutdown
