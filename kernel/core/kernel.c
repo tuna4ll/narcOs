@@ -126,6 +126,9 @@ int active_window_idx = -1;
 static int legacy_desktop_dir_index = -1;
 static int next_user_window_id = 100;
 static int desktop_owner_pid = 0;
+static int input_capture_window_id = -1;
+static int input_capture_owner_pid = 0;
+static uint32_t input_capture_flags = 0;
 static uint16_t desktop_event_head = 0;
 static uint16_t desktop_event_tail = 0;
 static gui_window_event_t desktop_event_queue[WINDOW_EVENT_QUEUE_CAP];
@@ -529,6 +532,73 @@ static int nwm_pop_window_event_idx(int idx, gui_window_event_t* out_event) {
     return 1;
 }
 
+static int nwm_input_capture_idx(void) {
+    int idx;
+
+    if (input_capture_window_id < 0 || input_capture_owner_pid <= 0) return -1;
+    idx = nwm_get_idx_by_id(input_capture_window_id);
+    if (idx < 0) return -1;
+    if (windows[idx].type != WIN_TYPE_USER ||
+        windows[idx].owner_pid != input_capture_owner_pid ||
+        !windows[idx].visible ||
+        windows[idx].minimized) {
+        return -1;
+    }
+    return idx;
+}
+
+static void nwm_clear_input_capture(int notify_window) {
+    int idx = nwm_input_capture_idx();
+
+    if (input_capture_window_id < 0) return;
+    if (notify_window && idx >= 0) {
+        (void)nwm_queue_window_event_idx(idx, GUI_WIN_EVT_INPUT_CAPTURE_LOST, 0, 0, 0);
+    }
+    input_capture_window_id = -1;
+    input_capture_owner_pid = 0;
+    input_capture_flags = 0;
+    gui_mark_dirty_full();
+    gui_needs_redraw = 1;
+}
+
+int nwm_input_capture_active(void) {
+    if (input_capture_window_id < 0) return 0;
+    if (nwm_input_capture_idx() >= 0) return 1;
+    nwm_clear_input_capture(0);
+    return 0;
+}
+
+int nwm_input_capture_captures_mouse(void) {
+    return nwm_input_capture_active() &&
+           (input_capture_flags & GUI_INPUT_CAPTURE_MOUSE) != 0U;
+}
+
+int nwm_input_capture_hides_cursor(void) {
+    return nwm_input_capture_active() &&
+           (input_capture_flags & GUI_INPUT_CAPTURE_HIDE_CURSOR) != 0U;
+}
+
+int nwm_input_capture_releases_on_escape(void) {
+    return nwm_input_capture_active() &&
+           (input_capture_flags & GUI_INPUT_CAPTURE_RELEASE_ON_ESCAPE) != 0U;
+}
+
+int nwm_release_input_capture(void) {
+    if (!nwm_input_capture_active()) return 0;
+    nwm_clear_input_capture(1);
+    return 0;
+}
+
+int nwm_queue_input_capture_event(uint16_t type, int16_t arg0, int16_t arg1, int32_t arg2) {
+    int idx = nwm_input_capture_idx();
+
+    if (idx < 0) {
+        nwm_clear_input_capture(0);
+        return -1;
+    }
+    return nwm_queue_window_event_idx(idx, type, arg0, arg1, arg2);
+}
+
 static int nwm_queue_desktop_event_internal(uint16_t type, int16_t arg0, int16_t arg1, int32_t arg2) {
     uint16_t next_tail;
 
@@ -854,6 +924,9 @@ void nwm_bring_to_front(int idx) {
     int old_active_idx = active_window_idx;
 
     if (idx < 0 || idx >= window_count) return;
+    if (input_capture_window_id >= 0 && windows[idx].id != input_capture_window_id) {
+        nwm_clear_input_capture(1);
+    }
     if (nwm_window_is_desktop_surface(&windows[idx])) {
         active_window_idx = nwm_pick_active_window_idx();
         return;
@@ -962,6 +1035,7 @@ int nwm_destroy_user_window(int owner_pid, int window_id) {
     int was_active;
 
     if (idx == -1 || windows[idx].type != WIN_TYPE_USER || windows[idx].owner_pid != owner_pid) return -1;
+    if (windows[idx].id == input_capture_window_id) nwm_clear_input_capture(0);
     nwm_free_window_client_surface(&windows[idx]);
     was_active = idx == active_window_idx;
     for (int i = idx; i < window_count - 1; i++) {
@@ -976,6 +1050,31 @@ int nwm_destroy_user_window(int owner_pid, int window_id) {
     } else if (active_window_idx >= window_count) {
         active_window_idx = nwm_pick_active_window_idx();
     }
+    gui_needs_redraw = 1;
+    return 0;
+}
+
+int nwm_set_user_window_input_capture(int owner_pid, int window_id, uint32_t flags) {
+    int idx;
+
+    if (owner_pid <= 0) return -1;
+    if (flags == 0U) {
+        if (input_capture_window_id == window_id && input_capture_owner_pid == owner_pid) {
+            nwm_clear_input_capture(1);
+            return 0;
+        }
+        return input_capture_window_id < 0 ? 0 : -1;
+    }
+
+    idx = nwm_get_idx_by_id(window_id);
+    if (idx < 0 || windows[idx].type != WIN_TYPE_USER || windows[idx].owner_pid != owner_pid) return -1;
+    if (!windows[idx].visible || windows[idx].minimized) return -1;
+
+    input_capture_window_id = window_id;
+    input_capture_owner_pid = owner_pid;
+    input_capture_flags = flags;
+    nwm_bring_to_front(idx);
+    gui_mark_dirty_full();
     gui_needs_redraw = 1;
     return 0;
 }
@@ -2308,6 +2407,7 @@ static void graphics_process_main(void) {
     int last_my = get_mouse_y();
     int last_lp = mouse_left_pressed();
     int last_rp = mouse_right_pressed();
+    int last_cursor_hidden = 0;
     vbe_set_cursor_mode(CURSOR_MODE_ARROW);
     vbe_compose_scene(windows, window_count, active_window_idx, 0,
                       legacy_desktop_dir_index >= 0 ? legacy_desktop_dir_index : current_dir_index,
@@ -2323,7 +2423,27 @@ static void graphics_process_main(void) {
         int rp = mouse_right_pressed();
         int mouse_moved = mouse_consume_moved();
         int mouse_wheel = mouse_consume_wheel();
+        int mouse_captured = nwm_input_capture_captures_mouse();
+        int cursor_hidden = nwm_input_capture_hides_cursor();
         int redraw = 0;
+
+        if (cursor_hidden != last_cursor_hidden) {
+            vbe_set_cursor_mode(cursor_hidden ? CURSOR_MODE_HIDDEN : CURSOR_MODE_ARROW);
+            gui_mark_dirty_rect(last_mx - 2, last_my - 2, 18, 18);
+            gui_mark_dirty_rect(mx - 2, my - 2, 18, 18);
+            gui_needs_redraw = 1;
+            last_cursor_hidden = cursor_hidden;
+        }
+        if (mouse_captured && cursor_hidden) {
+            int center_x = (int)vbe_get_width() / 2;
+            int center_y = (int)vbe_get_height() / 2;
+
+            if (center_x >= 0 && center_y >= 0 && (mx != center_x || my != center_y)) {
+                mouse_set_position(center_x, center_y);
+                mx = center_x;
+                my = center_y;
+            }
+        }
 
         if (cmd_ready) {
             execute_command(cmd_to_execute);
@@ -2342,19 +2462,36 @@ static void graphics_process_main(void) {
             }
         }
 
-        if (mouse_wheel != 0) {
-            nwm_queue_desktop_event(GUI_WIN_EVT_MOUSE_WHEEL, (int16_t)mx, (int16_t)my, mouse_wheel);
-        }
-        if (mouse_moved || mx != last_mx || my != last_my) {
-            nwm_queue_desktop_event(GUI_WIN_EVT_MOUSE_MOVE, (int16_t)mx, (int16_t)my, 0);
-        }
-        if (lp != last_lp) {
-            nwm_queue_desktop_event(lp ? GUI_WIN_EVT_MOUSE_DOWN : GUI_WIN_EVT_MOUSE_UP,
-                                    (int16_t)mx, (int16_t)my, lp ? 1 : 0);
-        }
-        if (rp != last_rp) {
-            nwm_queue_desktop_event(rp ? GUI_WIN_EVT_MOUSE_DOWN : GUI_WIN_EVT_MOUSE_UP,
-                                    (int16_t)mx, (int16_t)my, 2);
+        if (mouse_captured) {
+            if (mouse_wheel != 0) {
+                (void)nwm_queue_input_capture_event(GUI_WIN_EVT_MOUSE_WHEEL, (int16_t)mx, (int16_t)my, mouse_wheel);
+            }
+            if (mouse_moved || mx != last_mx || my != last_my) {
+                (void)nwm_queue_input_capture_event(GUI_WIN_EVT_MOUSE_MOVE, (int16_t)mx, (int16_t)my, 0);
+            }
+            if (lp != last_lp) {
+                (void)nwm_queue_input_capture_event(lp ? GUI_WIN_EVT_MOUSE_DOWN : GUI_WIN_EVT_MOUSE_UP,
+                                                    (int16_t)mx, (int16_t)my, lp ? 1 : 0);
+            }
+            if (rp != last_rp) {
+                (void)nwm_queue_input_capture_event(rp ? GUI_WIN_EVT_MOUSE_DOWN : GUI_WIN_EVT_MOUSE_UP,
+                                                    (int16_t)mx, (int16_t)my, 2);
+            }
+        } else {
+            if (mouse_wheel != 0) {
+                nwm_queue_desktop_event(GUI_WIN_EVT_MOUSE_WHEEL, (int16_t)mx, (int16_t)my, mouse_wheel);
+            }
+            if (mouse_moved || mx != last_mx || my != last_my) {
+                nwm_queue_desktop_event(GUI_WIN_EVT_MOUSE_MOVE, (int16_t)mx, (int16_t)my, 0);
+            }
+            if (lp != last_lp) {
+                nwm_queue_desktop_event(lp ? GUI_WIN_EVT_MOUSE_DOWN : GUI_WIN_EVT_MOUSE_UP,
+                                        (int16_t)mx, (int16_t)my, lp ? 1 : 0);
+            }
+            if (rp != last_rp) {
+                nwm_queue_desktop_event(rp ? GUI_WIN_EVT_MOUSE_DOWN : GUI_WIN_EVT_MOUSE_UP,
+                                        (int16_t)mx, (int16_t)my, 2);
+            }
         }
 
         run_user_tasks();

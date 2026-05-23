@@ -7,6 +7,8 @@
 #define DOOM_DEFAULT_WAD "/assets/doom1.wad"
 #define DOOM_CONFIG_DIR "/home/user/doom"
 #define DOOM_CONFIG_FILE "/home/user/doom/default.cfg"
+#define DOOM_CAPTURE_FLAGS (GUI_INPUT_CAPTURE_MOUSE | GUI_INPUT_CAPTURE_HIDE_CURSOR | GUI_INPUT_CAPTURE_RELEASE_ON_ESCAPE)
+#define DOOM_MOUSE_DELTA_LIMIT 512
 
 typedef struct {
     unsigned short events[DOOM_KEYQUEUE_SIZE];
@@ -21,6 +23,10 @@ typedef struct {
     int width;
     int height;
     int running;
+    int focused;
+    int capture_active;
+    int mouse_ready;
+    int mouse_buttons;
 } narcos_doom_state_t;
 
 static narcos_doom_state_t doom_state;
@@ -112,12 +118,54 @@ static void doom_queue_key(int pressed, int scancode) {
     doom_state.write_idx = next;
 }
 
+static int doom_clamp_mouse_delta(int value) {
+    if (value > DOOM_MOUSE_DELTA_LIMIT) return DOOM_MOUSE_DELTA_LIMIT;
+    if (value < -DOOM_MOUSE_DELTA_LIMIT) return -DOOM_MOUSE_DELTA_LIMIT;
+    return value;
+}
+
+static void doom_mark_capture_lost(void) {
+    doom_state.capture_active = 0;
+    doom_state.mouse_ready = 0;
+}
+
+static int doom_request_capture(void) {
+    mouse_state_t flush_state;
+
+    if (doom_state.window_id < 0) return -1;
+    if (user_gui_set_input_capture(doom_state.window_id, DOOM_CAPTURE_FLAGS) != 0) return -1;
+    doom_state.capture_active = 1;
+    doom_state.focused = 1;
+    doom_state.mouse_ready = 0;
+    doom_state.mouse_buttons = 0;
+    (void)user_mouse_get_state(&flush_state);
+    return 0;
+}
+
+static void doom_release_capture(void) {
+    if (doom_state.capture_active && doom_state.window_id >= 0) {
+        (void)user_gui_set_input_capture(doom_state.window_id, 0);
+    }
+    doom_mark_capture_lost();
+}
+
 static void doom_poll_events(void) {
     gui_window_event_t event;
 
     while (user_gui_poll_event(doom_state.window_id, &event) > 0) {
         if (event.type == GUI_WIN_EVT_CLOSE_REQUEST) {
+            doom_release_capture();
             doom_state.running = 0;
+        } else if (event.type == GUI_WIN_EVT_FOCUS_GAINED) {
+            doom_state.focused = 1;
+            doom_state.mouse_ready = 0;
+        } else if (event.type == GUI_WIN_EVT_FOCUS_LOST) {
+            doom_state.focused = 0;
+            doom_release_capture();
+        } else if (event.type == GUI_WIN_EVT_INPUT_CAPTURE_LOST) {
+            doom_mark_capture_lost();
+        } else if (event.type == GUI_WIN_EVT_MOUSE_DOWN) {
+            if (!doom_state.capture_active) (void)doom_request_capture();
         } else if (event.type == GUI_WIN_EVT_KEY_DOWN) {
             doom_queue_key(1, event.arg0);
         } else if (event.type == GUI_WIN_EVT_KEY_UP) {
@@ -127,6 +175,41 @@ static void doom_poll_events(void) {
             doom_state.height = 0;
         }
     }
+}
+
+int DG_GetMouse(int* buttons, int* dx, int* dy) {
+    mouse_state_t state;
+    int next_buttons;
+    int move_dx;
+    int move_dy;
+
+    doom_poll_events();
+    if (!doom_state.focused || !doom_state.capture_active) {
+        if (doom_state.mouse_buttons == 0) return 0;
+        doom_state.mouse_buttons = 0;
+        if (buttons) *buttons = 0;
+        if (dx) *dx = 0;
+        if (dy) *dy = 0;
+        return 1;
+    }
+    if (user_mouse_get_state(&state) != 0) return 0;
+
+    next_buttons = (int)state.buttons & 0x03;
+    move_dx = doom_clamp_mouse_delta(state.dx);
+    move_dy = doom_clamp_mouse_delta(state.dy);
+
+    if (!doom_state.mouse_ready) {
+        doom_state.mouse_ready = 1;
+        doom_state.mouse_buttons = next_buttons;
+        return 0;
+    }
+    if (move_dx == 0 && move_dy == 0 && next_buttons == doom_state.mouse_buttons) return 0;
+
+    doom_state.mouse_buttons = next_buttons;
+    if (buttons) *buttons = next_buttons;
+    if (dx) *dx = move_dx;
+    if (dy) *dy = move_dy;
+    return 1;
 }
 
 static int doom_ensure_present_surface(void) {
@@ -140,7 +223,7 @@ static int doom_ensure_present_surface(void) {
     if (doom_state.width <= 0 || doom_state.height <= 0) return -1;
     pixels64 = (uint64_t)(uint32_t)doom_state.width * (uint64_t)(uint32_t)doom_state.height;
     if (pixels64 == 0U || pixels64 > 0x3FFFFFU) return -1;
-    if (doom_state.width >= DOOMGENERIC_RESX && doom_state.height >= DOOMGENERIC_RESY) return 0;
+    if (doom_state.width == DOOMGENERIC_RESX && doom_state.height == DOOMGENERIC_RESY) return 0;
     pixels = (uint32_t)pixels64;
     if (!doom_state.present_pixels || pixels > doom_state.present_capacity) {
         uint32_t* new_pixels = (uint32_t*)user_malloc((size_t)pixels * sizeof(uint32_t));
@@ -341,7 +424,12 @@ void DG_Init(void) {
         user_exit(1);
     }
     doom_state.running = 1;
+    doom_state.focused = 1;
+    doom_state.capture_active = 0;
+    doom_state.mouse_ready = 0;
+    doom_state.mouse_buttons = 0;
     (void)user_gui_set_title(doom_state.window_id, "Doom");
+    (void)doom_request_capture();
     if (doom_ensure_present_surface() != 0) {
         userlib_print_error("doom: failed to allocate framebuffer");
         user_exit(1);
@@ -352,7 +440,6 @@ void DG_DrawFrame(void) {
     gui_present_params_t present;
     uintptr_t buffer_ptr;
     uint32_t stride_bytes;
-    uint32_t flags = 0;
 
     doom_poll_events();
     if (!doom_state.running) user_exit(0);
@@ -361,10 +448,6 @@ void DG_DrawFrame(void) {
     if (doom_state.width == DOOMGENERIC_RESX && doom_state.height == DOOMGENERIC_RESY) {
         buffer_ptr = (uintptr_t)DG_ScreenBuffer;
         stride_bytes = DOOMGENERIC_RESX * 4U;
-    } else if (doom_state.width >= DOOMGENERIC_RESX && doom_state.height >= DOOMGENERIC_RESY) {
-        buffer_ptr = (uintptr_t)DG_ScreenBuffer;
-        stride_bytes = DOOMGENERIC_RESX * 4U;
-        flags = GUI_PRESENT_FLAG_STRETCH_CLIENT;
     } else {
         if (doom_scale_frame() != 0) user_exit(1);
         buffer_ptr = (uintptr_t)doom_state.present_pixels;
@@ -372,12 +455,12 @@ void DG_DrawFrame(void) {
     }
 
     present.size = sizeof(present);
-    present.flags = flags;
+    present.flags = 0;
     present.buffer_ptr = buffer_ptr;
     present.x = 0;
     present.y = 0;
-    present.width = flags == GUI_PRESENT_FLAG_STRETCH_CLIENT ? DOOMGENERIC_RESX : (uint32_t)doom_state.width;
-    present.height = flags == GUI_PRESENT_FLAG_STRETCH_CLIENT ? DOOMGENERIC_RESY : (uint32_t)doom_state.height;
+    present.width = (uint32_t)doom_state.width;
+    present.height = (uint32_t)doom_state.height;
     present.stride_bytes = stride_bytes;
     if (user_gui_present(doom_state.window_id, &present) != 0) user_exit(1);
 }

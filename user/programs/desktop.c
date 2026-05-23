@@ -1100,34 +1100,34 @@ static void activate_desktop_icon(const desktop_icon_entry_t* icon, char* status
             argv[0] = "/bin/explorer";
             argv[1] = icon->path;
             rc = user_spawn("/bin/explorer", argv, 2U);
-            copy_text(status_text, status_size, rc == 0 ? "Explorer opened" : "Explorer open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Explorer opened" : "Explorer open failed");
             break;
         case DESKTOP_ICON_KIND_SNAKE:
             argv[0] = "/bin/snake";
             rc = user_spawn("/bin/snake", argv, 1U);
-            copy_text(status_text, status_size, rc == 0 ? "Snake opened" : "Snake open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Snake opened" : "Snake open failed");
             break;
         case DESKTOP_ICON_KIND_DOOM:
             argv[0] = "/bin/doom";
             rc = user_spawn("/bin/doom", argv, 1U);
-            copy_text(status_text, status_size, rc == 0 ? "Doom opened" : "Doom open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Doom opened" : "Doom open failed");
             break;
         case DESKTOP_ICON_KIND_SETTINGS:
             argv[0] = "/bin/settings";
             rc = user_spawn("/bin/settings", argv, 1U);
-            copy_text(status_text, status_size, rc == 0 ? "Settings opened" : "Settings open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Settings opened" : "Settings open failed");
             break;
         case DESKTOP_ICON_KIND_DIR:
             argv[0] = "/bin/explorer";
             argv[1] = icon->path;
             rc = user_spawn("/bin/explorer", argv, 2U);
-            copy_text(status_text, status_size, rc == 0 ? "Folder opened" : "Folder open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Folder opened" : "Folder open failed");
             break;
         case DESKTOP_ICON_KIND_FILE:
             argv[0] = "/bin/narcpad";
             argv[1] = icon->path;
             rc = user_spawn("/bin/narcpad", argv, 2U);
-            copy_text(status_text, status_size, rc == 0 ? "File opened" : "File open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "File opened" : "File open failed");
             break;
         default:
             copy_text(status_text, status_size, "Unknown desktop icon");
@@ -1274,23 +1274,23 @@ static void launch_menu_action(int item_idx, char* status_text, size_t status_si
     switch (item_idx) {
         case 0:
             rc = user_spawn("/bin/explorer", explorer_argv, 2U);
-            copy_text(status_text, status_size, rc == 0 ? "Explorer opened" : "Explorer open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Explorer opened" : "Explorer open failed");
             break;
         case 1:
             rc = user_spawn("/bin/settings", settings_argv, 1U);
-            copy_text(status_text, status_size, rc == 0 ? "Settings opened" : "Settings open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Settings opened" : "Settings open failed");
             break;
         case 2:
             rc = user_spawn("/bin/snake", snake_argv, 1U);
-            copy_text(status_text, status_size, rc == 0 ? "Snake opened" : "Snake open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Snake opened" : "Snake open failed");
             break;
         case 3:
             rc = user_spawn("/bin/doom", doom_argv, 1U);
-            copy_text(status_text, status_size, rc == 0 ? "Doom opened" : "Doom open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Doom opened" : "Doom open failed");
             break;
         case 4:
             rc = user_spawn("/bin/narcpad", narcpad_readme_argv, 2U);
-            copy_text(status_text, status_size, rc == 0 ? "Readme opened in NarcPad" : "Readme open failed");
+            copy_text(status_text, status_size, rc >= 0 ? "Readme opened in NarcPad" : "Readme open failed");
             break;
         case 5:
             rc = user_spawn("/bin/hello", hello_argv, 1U);

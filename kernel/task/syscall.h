@@ -33,6 +33,16 @@ typedef struct {
     uint8_t second;
 } rtc_local_time_t;
 
+typedef struct {
+    uint32_t size;
+    int32_t x;
+    int32_t y;
+    int32_t dx;
+    int32_t dy;
+    int32_t wheel;
+    uint32_t buttons;
+} mouse_state_t;
+
 #define WAITPID_FLAG_NOHANG 0x1U
 
 #define SYS_EXIT    0
@@ -107,6 +117,8 @@ typedef struct {
 #define SYS_GUI_READ_WINDOW_SURFACE 69
 #define SYS_GUI_DESKTOP_CONSUME_OPEN_PATH 70
 #define SYS_NET_GET_STATS 71
+#define SYS_MOUSE_GET_STATE 72
+#define SYS_GUI_SET_INPUT_CAPTURE 73
 
 void syscall_handler(arch_trap_frame_t* frame);
 int copy_from_user(void* dst, const void* user_src, uint32_t len);

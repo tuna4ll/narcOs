@@ -15,7 +15,8 @@ typedef enum {
     CURSOR_MODE_RESIZE_H,
     CURSOR_MODE_RESIZE_V,
     CURSOR_MODE_RESIZE_DIAG_LR,
-    CURSOR_MODE_RESIZE_DIAG_RL
+    CURSOR_MODE_RESIZE_DIAG_RL,
+    CURSOR_MODE_HIDDEN
 } cursor_mode_t;
 
 typedef struct {
@@ -108,6 +109,13 @@ int nwm_set_user_window_title(int owner_pid, int window_id, const char* title);
 int nwm_present_user_window(int owner_pid, int window_id, const gui_present_params_t* params);
 int nwm_get_user_window_info(int owner_pid, int window_id, gui_window_info_t* out_info);
 int nwm_poll_user_window_event(int owner_pid, int window_id, gui_window_event_t* out_event);
+int nwm_set_user_window_input_capture(int owner_pid, int window_id, uint32_t flags);
+int nwm_input_capture_active(void);
+int nwm_input_capture_captures_mouse(void);
+int nwm_input_capture_hides_cursor(void);
+int nwm_input_capture_releases_on_escape(void);
+int nwm_release_input_capture(void);
+int nwm_queue_input_capture_event(uint16_t type, int16_t arg0, int16_t arg1, int32_t arg2);
 int nwm_get_screen_info(gui_screen_info_t* out_info);
 int nwm_register_desktop_owner(int owner_pid);
 void nwm_release_desktop_owner(int owner_pid);

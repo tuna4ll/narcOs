@@ -912,6 +912,7 @@ void vbe_draw_wallpaper() {
 }
 
 void vbe_draw_cursor(int x, int y) {
+    if (current_cursor_mode == CURSOR_MODE_HIDDEN) return;
     if (current_cursor_mode == CURSOR_MODE_RESIZE_H) {
         vbe_draw_cursor_hresize(x, y);
         return;

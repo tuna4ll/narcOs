@@ -197,6 +197,16 @@ static const struct
 
 static boolean  gamekeydown[NUMKEYS]; 
 static int      turnheld;		// for accelerative turning 
+
+static boolean GameKeyDown(int key)
+{
+    return key >= 0 && key < NUMKEYS && gamekeydown[key];
+}
+
+static boolean GameKeyDownFallback(int key, int fallback)
+{
+    return GameKeyDown(key) || (key != fallback && GameKeyDown(fallback));
+}
  
 static boolean  mousearray[MAX_MOUSE_BUTTONS + 1];
 static boolean *mousebuttons = &mousearray[1];  // allow [-1]
@@ -334,15 +344,14 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     cmd->consistancy = 
 	consistancy[consoleplayer][maketic%BACKUPTICS]; 
  
-    strafe = gamekeydown[key_strafe] || mousebuttons[mousebstrafe] 
-	|| joybuttons[joybstrafe]; 
+    strafe = GameKeyDown(key_strafe) || joybuttons[joybstrafe];
 
     // fraggle: support the old "joyb_speed = 31" hack which
     // allowed an autorun effect
 
     speed = key_speed >= NUMKEYS
          || joybspeed >= MAX_JOY_BUTTONS
-         || gamekeydown[key_speed] 
+         || GameKeyDown(key_speed)
          || joybuttons[joybspeed];
  
     forward = side = 0;
@@ -351,8 +360,8 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     // on the keyboard and joystick
     if (joyxmove < 0
 	|| joyxmove > 0  
-	|| gamekeydown[key_right]
-	|| gamekeydown[key_left]) 
+	|| GameKeyDown(key_right)
+	|| GameKeyDown(key_left))
 	turnheld += ticdup; 
     else 
 	turnheld = 0; 
@@ -365,12 +374,12 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     // let movement keys cancel each other out
     if (strafe) 
     { 
-	if (gamekeydown[key_right]) 
+	if (GameKeyDown(key_right))
 	{
 	    // fprintf(stderr, "strafe right\n");
 	    side += sidemove[speed]; 
 	}
-	if (gamekeydown[key_left]) 
+	if (GameKeyDown(key_left))
 	{
 	    //	fprintf(stderr, "strafe left\n");
 	    side -= sidemove[speed]; 
@@ -383,9 +392,9 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     } 
     else 
     { 
-	if (gamekeydown[key_right]) 
+	if (GameKeyDown(key_right))
 	    cmd->angleturn -= angleturn[tspeed]; 
-	if (gamekeydown[key_left]) 
+	if (GameKeyDown(key_left))
 	    cmd->angleturn += angleturn[tspeed]; 
 	if (joyxmove > 0) 
 	    cmd->angleturn -= angleturn[tspeed]; 
@@ -393,12 +402,12 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
 	    cmd->angleturn += angleturn[tspeed]; 
     } 
  
-    if (gamekeydown[key_up]) 
+    if (GameKeyDownFallback(key_up, 'w'))
     {
 	// fprintf(stderr, "up\n");
 	forward += forwardmove[speed]; 
     }
-    if (gamekeydown[key_down]) 
+    if (GameKeyDownFallback(key_down, 's'))
     {
 	// fprintf(stderr, "down\n");
 	forward -= forwardmove[speed]; 
@@ -409,17 +418,15 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     if (joyymove > 0) 
         forward -= forwardmove[speed]; 
 
-    if (gamekeydown[key_strafeleft]
+    if (GameKeyDownFallback(key_strafeleft, 'a')
      || joybuttons[joybstrafeleft]
-     || mousebuttons[mousebstrafeleft]
      || joystrafemove < 0)
     {
         side -= sidemove[speed];
     }
 
-    if (gamekeydown[key_straferight]
+    if (GameKeyDownFallback(key_straferight, 'd')
      || joybuttons[joybstraferight]
-     || mousebuttons[mousebstraferight]
      || joystrafemove > 0)
     {
         side += sidemove[speed]; 
@@ -471,15 +478,6 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
     next_weapon = 0;
 
     // mouse
-    if (mousebuttons[mousebforward]) 
-    {
-	forward += forwardmove[speed];
-    }
-    if (mousebuttons[mousebbackward])
-    {
-        forward -= forwardmove[speed];
-    }
-
     if (dclick_use)
     {
         // forward double click
@@ -507,9 +505,7 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
         }
         
         // strafe double click
-        bstrafe =
-            mousebuttons[mousebstrafe] 
-            || joybuttons[joybstrafe]; 
+        bstrafe = joybuttons[joybstrafe];
         if (bstrafe != dclickstate2 && dclicktime2 > 1 ) 
         { 
             dclickstate2 = bstrafe; 
@@ -534,12 +530,7 @@ void G_BuildTiccmd (ticcmd_t* cmd, int maketic)
         } 
     }
 
-    forward += mousey; 
-
-    if (strafe) 
-	side += mousex*2; 
-    else 
-	cmd->angleturn -= mousex*0x8; 
+    cmd->angleturn -= mousex*0x8;
 
     if (mousex == 0)
     {

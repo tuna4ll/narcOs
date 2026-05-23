@@ -11,6 +11,7 @@
 #include "serial.h"
 #include "usermode.h"
 #include "string.h"
+#include "mouse.h"
 
 extern void vga_println(const char* str);
 extern void vga_print(const char* str);
@@ -1372,6 +1373,40 @@ void syscall_PROCESS_SNAPSHOT(arch_trap_frame_t *frame, arch_syscall_state_t *re
     }
 }
 
+void syscall_MOUSE_GET_STATE(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    mouse_state_t state;
+    int dx = 0;
+    int dy = 0;
+
+    if (arg0 == 0U) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+
+    mouse_consume_delta(&dx, &dy);
+    state.size = sizeof(state);
+    state.x = get_mouse_x();
+    state.y = get_mouse_y();
+    state.dx = dx;
+    state.dy = dy;
+    state.wheel = 0;
+    state.buttons = (uint32_t)mouse_buttons_state();
+
+    reactivate_current_user_space();
+    syscall_set_result(frame, copy_to_user((void*)arg0, &state, sizeof(state)) == 0 ? 0 : -1);
+}
+
+void syscall_GUI_SET_INPUT_CAPTURE(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+
+    syscall_set_result(frame,
+                       nwm_set_user_window_input_capture(process_current_pid(),
+                                                         (int)arg0,
+                                                         (uint32_t)arg1));
+}
+
 void syscall_EXIT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
     uintptr_t arg0 = (uintptr_t)regs->arg0;
 
@@ -1457,6 +1492,8 @@ static syscall_handler_routine syscalltab[] = {
     syscall_GUI_READ_WINDOW_SURFACE,
     syscall_GUI_DESKTOP_CONSUME_OPEN_PATH,
     syscall_NET_GET_STATS,
+    syscall_MOUSE_GET_STATE,
+    syscall_GUI_SET_INPUT_CAPTURE,
 };
 
 void syscall_handler(arch_trap_frame_t* frame) {

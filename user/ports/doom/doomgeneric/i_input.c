@@ -42,6 +42,7 @@
 #include "doomgeneric.h"
 
 int vanilla_keyboard_mapping = 1;
+extern int usemouse;
 
 // Is the shift key currently down?
 
@@ -280,6 +281,9 @@ void I_GetEvent(void)
 {
     event_t event;
     int pressed;
+    int mouse_buttons;
+    int mouse_dx;
+    int mouse_dy;
     unsigned char key;
 
     
@@ -323,19 +327,18 @@ void I_GetEvent(void)
         }
     }
 
-
-                /*
-            case SDL_MOUSEMOTION:
-                event.type = ev_mouse;
-                event.data1 = mouse_button_state;
-                event.data2 = AccelerateMouse(sdlevent.motion.xrel);
-                event.data3 = -AccelerateMouse(sdlevent.motion.yrel);
-                D_PostEvent(&event);
-                break;
-                */
+    while (DG_GetMouse(&mouse_buttons, &mouse_dx, &mouse_dy))
+    {
+        event.type = ev_mouse;
+        event.data1 = mouse_buttons;
+        event.data2 = mouse_dx;
+        event.data3 = 0;
+        event.data4 = 0;
+        D_PostEvent(&event);
+    }
 }
 
 void I_InitInput(void)
 {
+    usemouse = 1;
 }
-

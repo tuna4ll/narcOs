@@ -8,10 +8,55 @@ static uint8_t mouse_packet[4];
 static uint8_t mouse_packet_size = 3;
 static volatile int mouse_x = 512;
 static volatile int mouse_y = 384;
-static int     left_button = 0;
-static int     right_button = 0;
+static volatile int left_button = 0;
+static volatile int right_button = 0;
 static volatile int mouse_moved = 0;
 static volatile int mouse_wheel = 0;
+static volatile int mouse_delta_x = 0;
+static volatile int mouse_delta_y = 0;
+
+static uint32_t mouse_irq_save(void) {
+    uintptr_t flags;
+
+#if UINTPTR_MAX > 0xFFFFFFFFU
+    asm volatile(
+        "pushfq\n\t"
+        "popq %0\n\t"
+        "cli"
+        : "=r"(flags)
+        :
+        : "cc", "memory");
+#else
+    asm volatile(
+        "pushfl\n\t"
+        "popl %0\n\t"
+        "cli"
+        : "=r"(flags)
+        :
+        : "cc", "memory");
+#endif
+    return (uint32_t)flags;
+}
+
+static void mouse_irq_restore(uint32_t flags) {
+#if UINTPTR_MAX > 0xFFFFFFFFU
+    uintptr_t wide_flags = (uintptr_t)flags;
+
+    asm volatile(
+        "pushq %0\n\t"
+        "popfq"
+        :
+        : "r"(wide_flags)
+        : "cc", "memory");
+#else
+    asm volatile(
+        "pushl %0\n\t"
+        "popfl"
+        :
+        : "r"(flags)
+        : "cc", "memory");
+#endif
+}
 
 void mouse_wait(uint8_t type) {
     uint32_t timeout = 100000;
@@ -119,6 +164,14 @@ void handle_mouse() {
             if (y_rel > 6) y_rel += y_rel / 2;
             if (y_rel < -6) y_rel += y_rel / 2;
 
+            mouse_delta_x += x_rel;
+            mouse_delta_y += y_rel;
+            if (mouse_delta_x > 2048) mouse_delta_x = 2048;
+            if (mouse_delta_x < -2048) mouse_delta_x = -2048;
+            if (mouse_delta_y > 2048) mouse_delta_y = 2048;
+            if (mouse_delta_y < -2048) mouse_delta_y = -2048;
+            if (x_rel != 0 || y_rel != 0) mouse_moved = 1;
+
             int new_x = mouse_x + x_rel;
             int new_y = mouse_y - y_rel;
             
@@ -149,6 +202,36 @@ int get_mouse_x() { return mouse_x; }
 int get_mouse_y() { return mouse_y; }
 int mouse_left_pressed() { return left_button; }
 int mouse_right_pressed() { return right_button; }
+int mouse_buttons_state() {
+    return (left_button ? 1 : 0) | (right_button ? 2 : 0);
+}
+void mouse_set_position(int x, int y) {
+    int max_w = (int)vbe_get_width();
+    int max_h = (int)vbe_get_height();
+    uint32_t flags;
+
+    if (max_w <= 0 || max_h <= 0) return;
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x >= max_w) x = max_w - 1;
+    if (y >= max_h) y = max_h - 1;
+
+    flags = mouse_irq_save();
+    mouse_x = x;
+    mouse_y = y;
+    mouse_irq_restore(flags);
+}
+void mouse_consume_delta(int* out_dx, int* out_dy) {
+    uint32_t flags = mouse_irq_save();
+    int dx = mouse_delta_x;
+    int dy = mouse_delta_y;
+
+    mouse_delta_x = 0;
+    mouse_delta_y = 0;
+    mouse_irq_restore(flags);
+    if (out_dx) *out_dx = dx;
+    if (out_dy) *out_dy = dy;
+}
 int mouse_consume_moved() {
     int moved = mouse_moved;
     mouse_moved = 0;

@@ -177,6 +177,15 @@ static inline int user_gui_consume_open_path(char* path, uint32_t max_len) {
     return (int)user_syscall2(SYS_GUI_DESKTOP_CONSUME_OPEN_PATH, (uintptr_t)path, max_len);
 }
 
+static inline int user_mouse_get_state(mouse_state_t* out_state) {
+    if (out_state) out_state->size = sizeof(*out_state);
+    return (int)user_syscall1(SYS_MOUSE_GET_STATE, (uintptr_t)out_state);
+}
+
+static inline int user_gui_set_input_capture(int handle, uint32_t flags) {
+    return (int)user_syscall2(SYS_GUI_SET_INPUT_CAPTURE, (uintptr_t)handle, flags);
+}
+
 static inline int user_process_snapshot(process_snapshot_entry_t* entries, int max_entries) {
     return (int)user_syscall2(SYS_PROCESS_SNAPSHOT, (uintptr_t)entries, (uintptr_t)max_entries);
 }

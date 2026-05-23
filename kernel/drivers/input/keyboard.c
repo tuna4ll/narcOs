@@ -132,6 +132,21 @@ extern void vga_scrollback_home(void);
 extern void vga_scrollback_end(void);
 extern void vga_scrollback_follow_live(void);
 
+static int keyboard_queue_gui_event(uint16_t type, int16_t arg0, int16_t arg1, int32_t arg2) {
+    if (nwm_input_capture_active()) {
+        if (type == GUI_WIN_EVT_KEY_DOWN &&
+            arg0 == 0x01 &&
+            nwm_input_capture_releases_on_escape() &&
+            nwm_release_input_capture() == 0) {
+            return 1;
+        }
+        (void)nwm_queue_input_capture_event(type, arg0, arg1, arg2);
+        return 0;
+    }
+    nwm_queue_desktop_event(type, arg0, arg1, arg2);
+    return 0;
+}
+
 static const char* shell_commands[] = {
     "help", "clear", "mem", "snake", "settings", "ver", "uptime", "date", "time",
     "ls", "pwd", "ps", "credits", "echo", "spawn", "wait", "kill", "touch", "cat", "write", "edit", "mkdir", "cd",
@@ -365,7 +380,7 @@ void handle_keyboard()
             int is_ctrl = lctrl_pressed || rctrl_pressed;
             int modifiers = (is_shift ? 1 : 0) | (is_ctrl ? 2 : 0) | (capslock_active ? 4 : 0);
 
-            nwm_queue_desktop_event(GUI_WIN_EVT_KEY_UP, (int16_t)key, 0, modifiers);
+            (void)keyboard_queue_gui_event(GUI_WIN_EVT_KEY_UP, (int16_t)key, 0, modifiers);
         }
         outb(0x20, 0x20);
         return;
@@ -375,7 +390,7 @@ void handle_keyboard()
         if (screen_is_graphics_enabled()) {
             int modifiers = (lshift_pressed || rshift_pressed ? 1 : 0) | 2 | (capslock_active ? 4 : 0);
 
-            nwm_queue_desktop_event(GUI_WIN_EVT_KEY_DOWN, (int16_t)scancode, 0, modifiers);
+            (void)keyboard_queue_gui_event(GUI_WIN_EVT_KEY_DOWN, (int16_t)scancode, 0, modifiers);
         }
         outb(0x20, 0x20);
         return;
@@ -385,7 +400,7 @@ void handle_keyboard()
         if (screen_is_graphics_enabled()) {
             int modifiers = 1 | (lctrl_pressed || rctrl_pressed ? 2 : 0) | (capslock_active ? 4 : 0);
 
-            nwm_queue_desktop_event(GUI_WIN_EVT_KEY_DOWN, (int16_t)scancode, 0, modifiers);
+            (void)keyboard_queue_gui_event(GUI_WIN_EVT_KEY_DOWN, (int16_t)scancode, 0, modifiers);
         }
         outb(0x20, 0x20);
         return;
@@ -395,7 +410,7 @@ void handle_keyboard()
         if (screen_is_graphics_enabled()) {
             int modifiers = 1 | (lctrl_pressed || rctrl_pressed ? 2 : 0) | (capslock_active ? 4 : 0);
 
-            nwm_queue_desktop_event(GUI_WIN_EVT_KEY_DOWN, (int16_t)scancode, 0, modifiers);
+            (void)keyboard_queue_gui_event(GUI_WIN_EVT_KEY_DOWN, (int16_t)scancode, 0, modifiers);
         }
         outb(0x20, 0x20);
         return;
@@ -419,10 +434,11 @@ void handle_keyboard()
         return;
     }
 
-    nwm_queue_desktop_event(GUI_WIN_EVT_KEY_DOWN, (int16_t)scancode, 0, modifiers);
-    if (scancode == 0x0E) nwm_queue_desktop_event(GUI_WIN_EVT_CHAR, '\b', 0, 0);
-    else if (scancode == 0x1C) nwm_queue_desktop_event(GUI_WIN_EVT_CHAR, '\n', 0, 0);
-    else if (c != 0) nwm_queue_desktop_event(GUI_WIN_EVT_CHAR, (int16_t)c, 0, 0);
+    if (!keyboard_queue_gui_event(GUI_WIN_EVT_KEY_DOWN, (int16_t)scancode, 0, modifiers)) {
+        if (scancode == 0x0E) (void)keyboard_queue_gui_event(GUI_WIN_EVT_CHAR, '\b', 0, 0);
+        else if (scancode == 0x1C) (void)keyboard_queue_gui_event(GUI_WIN_EVT_CHAR, '\n', 0, 0);
+        else if (c != 0) (void)keyboard_queue_gui_event(GUI_WIN_EVT_CHAR, (int16_t)c, 0, 0);
+    }
 
     outb(0x20, 0x20);
 }

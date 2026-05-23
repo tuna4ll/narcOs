@@ -23,8 +23,11 @@ DEFER_BUFFER1_ADDR equ 0x9800
 DEFER_BUFFER1_SIZE equ 0x2800
 DEFER_BUFFER2_ADDR equ 0x4000
 DEFER_BUFFER2_SIZE equ 0x1000
-DEFER_BUFFER_SIZE equ DEFER_BUFFER1_SIZE + DEFER_BUFFER2_SIZE
+DEFER_BUFFER3_ADDR equ 0x5800
+DEFER_BUFFER3_SIZE equ 0x0800
+DEFER_BUFFER_SIZE equ DEFER_BUFFER1_SIZE + DEFER_BUFFER2_SIZE + DEFER_BUFFER3_SIZE
 DEFER_DST_START equ 0x0009C000
+DEFER_DST_END   equ 0x000A0000
 ELF_PHENTSIZE64 equ 56
 ELF_PT_LOAD     equ 1
 MAX_ZERO_RANGES equ 4
@@ -906,6 +909,8 @@ clamp_segment_copy_count:
     movzx edx, word [segment_copy_count]
     test edx, edx
     jz .done
+    cmp eax, DEFER_DST_END
+    jae .done
     cmp eax, DEFER_DST_START
     jae .deferred
     add edx, eax
@@ -927,9 +932,21 @@ clamp_segment_copy_count:
     mov [segment_copy_count], dx
     jmp .done
 .second_buffer:
-    cmp eax, DEFER_BUFFER_SIZE
+    cmp eax, DEFER_BUFFER1_SIZE + DEFER_BUFFER2_SIZE
+    jae .third_buffer
+    sub eax, DEFER_BUFFER1_SIZE
+    mov edx, DEFER_BUFFER2_SIZE
+    sub edx, eax
+    movzx eax, word [segment_copy_count]
+    cmp eax, edx
+    jbe .done
+    mov [segment_copy_count], dx
+    jmp .done
+.third_buffer:
+    sub eax, DEFER_BUFFER1_SIZE + DEFER_BUFFER2_SIZE
+    cmp eax, DEFER_BUFFER3_SIZE
     jae .overflow
-    mov edx, DEFER_BUFFER_SIZE
+    mov edx, DEFER_BUFFER3_SIZE
     sub edx, eax
     movzx eax, word [segment_copy_count]
     cmp eax, edx
@@ -960,6 +977,8 @@ copy_segment_chunk:
     mov eax, [segment_dst]
     cmp eax, DEFER_DST_START
     jb .direct_dest
+    cmp eax, DEFER_DST_END
+    jae .direct_dest
 
     mov edx, eax
     sub edx, DEFER_DST_START
@@ -984,6 +1003,8 @@ copy_segment_chunk:
 
 .second_defer_buffer:
     sub edx, DEFER_BUFFER1_SIZE
+    cmp edx, DEFER_BUFFER2_SIZE
+    jae .third_defer_buffer
     movzx ebx, word [segment_copy_count]
     add ebx, edx
     cmp ebx, DEFER_BUFFER2_SIZE
@@ -999,6 +1020,25 @@ copy_segment_chunk:
 .second_defer_end_ok:
     mov eax, edx
     add eax, DEFER_BUFFER2_ADDR
+    jmp .set_dest
+
+.third_defer_buffer:
+    sub edx, DEFER_BUFFER2_SIZE
+    movzx ebx, word [segment_copy_count]
+    add ebx, edx
+    cmp ebx, DEFER_BUFFER3_SIZE
+    ja .overflow
+
+    mov byte [defer_tail_active], 1
+    mov eax, [segment_dst]
+    movzx ebx, word [segment_copy_count]
+    add eax, ebx
+    cmp eax, [defer_tail_end]
+    jbe .third_defer_end_ok
+    mov [defer_tail_end], eax
+.third_defer_end_ok:
+    mov eax, edx
+    add eax, DEFER_BUFFER3_ADDR
     jmp .set_dest
 
 .direct_dest:
@@ -1061,11 +1101,29 @@ flush_deferred_tail:
     mov ax, [defer_flush_left]
     sub ax, [defer_flush_count]
     jz .out
+    cmp ax, DEFER_BUFFER2_SIZE
+    jbe .secondary_count_ok
+    mov ax, DEFER_BUFFER2_SIZE
+.secondary_count_ok:
+    mov [defer_flush_count], ax
     mov cx, ax
     xor ax, ax
     mov ds, ax
     mov si, DEFER_BUFFER2_ADDR
     mov ax, (DEFER_DST_START + DEFER_BUFFER1_SIZE) >> 4
+    mov es, ax
+    xor di, di
+    cld
+    rep movsb
+    mov ax, [defer_flush_left]
+    sub ax, DEFER_BUFFER1_SIZE
+    sub ax, [defer_flush_count]
+    jz .out
+    mov cx, ax
+    xor ax, ax
+    mov ds, ax
+    mov si, DEFER_BUFFER3_ADDR
+    mov ax, (DEFER_DST_START + DEFER_BUFFER1_SIZE + DEFER_BUFFER2_SIZE) >> 4
     mov es, ax
     xor di, di
     cld
