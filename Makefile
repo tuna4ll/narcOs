@@ -59,14 +59,14 @@ I386_DOOM_CFLAGS = $(DOOM_CFLAGS)
 X86_64_DOOM_CFLAGS = $(DOOM_CFLAGS) -DNARCOS_DOOM_NO_FLOAT
 
 KERNEL_INCLUDE_FLAGS = $(addprefix -I,$(KERNEL_DIRS))
-COMMON_CFLAGS = -ffreestanding -fno-pie -fno-pic -fno-stack-protector -fcf-protection=none -fno-builtin -fno-strict-aliasing -Wall -Wextra
-COMMON_USER_CFLAGS = -ffreestanding -fno-pie -fno-pic -fno-stack-protector -fcf-protection=none -fno-builtin -fno-strict-aliasing -Wall -Wextra -I$(USER_DIR)/include
+COMMON_CFLAGS = -ffreestanding -fno-pie -fno-pic -fno-stack-protector -fcf-protection=none -fno-builtin -fno-strict-aliasing -Wall -Wextra -ffunction-sections -fdata-sections
+COMMON_USER_CFLAGS = -ffreestanding -fno-pie -fno-pic -fno-stack-protector -fcf-protection=none -fno-builtin -fno-strict-aliasing -Wall -Wextra -I$(USER_DIR)/include -ffunction-sections -fdata-sections
 
 I386_OBJ_DIR = $(OBJ_DIR)/i386
 I386_CFLAGS = -m32 $(COMMON_CFLAGS) $(KERNEL_INCLUDE_FLAGS) -mpreferred-stack-boundary=2 -mno-red-zone -Os -fomit-frame-pointer
 I386_USER_CFLAGS = -m32 $(COMMON_USER_CFLAGS) $(KERNEL_INCLUDE_FLAGS) -mpreferred-stack-boundary=2 -mno-red-zone -O2 -fomit-frame-pointer
-I386_LDFLAGS = -m elf_i386 -T linker_i386.ld -nostdlib -s --strip-all
-I386_USER_LDFLAGS = -m elf_i386 -T $(USER_DIR)/linker.ld -nostdlib -s --strip-all
+I386_LDFLAGS = -m elf_i386 -T linker_i386.ld -nostdlib -s --strip-all --gc-sections
+I386_USER_LDFLAGS = -m elf_i386 -T $(USER_DIR)/linker.ld -nostdlib -s --strip-all --gc-sections
 I386_C_SOURCES = $(filter-out \
 	$(USER_TLS_SOURCES) \
 	$(KERN_DIR)/apps/user_explorer.c \
@@ -120,7 +120,7 @@ I386_USB_IMAGE = $(I386_OBJ_DIR)/narcos-i386-usb.img
 X86_64_OBJ_DIR = $(OBJ_DIR)/x86_64
 X86_64_CFLAGS = -m64 $(COMMON_CFLAGS) -I$(KERN_DIR)/arch/x86_64 $(KERNEL_INCLUDE_FLAGS) -mno-red-zone -mgeneral-regs-only -mno-mmx -mno-sse -mno-sse2 -msoft-float -O2 -fomit-frame-pointer
 X86_64_USER_CFLAGS = -m64 $(COMMON_USER_CFLAGS) -I$(KERN_DIR)/arch/x86_64 $(KERNEL_INCLUDE_FLAGS) -mno-red-zone -mgeneral-regs-only -mno-mmx -mno-sse -mno-sse2 -msoft-float -O2 -fomit-frame-pointer
-X86_64_LDFLAGS = -m elf_x86_64 -T linker_x86_64.ld -nostdlib
+X86_64_LDFLAGS = -m elf_x86_64 -T linker_x86_64.ld -nostdlib --gc-sections
 X86_64_ALL_C_SOURCES = $(filter-out $(USER_TLS_SOURCES),$(shell find $(KERN_DIR) -name '*.c' | sort))
 X86_64_C_SOURCES = $(filter-out \
 	$(KERN_DIR)/arch/x86/% \
@@ -452,9 +452,14 @@ $(X86_64_DESKTOP_ASSET_BG_OBJECT): $(X86_64_DESKTOP_ASSET_BG_RGB)
 	@mkdir -p $(dir $@)
 	$(LD) -r -b binary -m elf_x86_64 $< -o $@
 
-$(X86_64_KERNEL_ELF): $(X86_64_KERNEL_OBJECTS) linker_x86_64.ld
+RUST_SMP_LIB = crates/narcos-smp/target/x86_64-unknown-none/release/libnarcos_smp.a
+
+$(RUST_SMP_LIB):
+	@cd crates/narcos-smp && cargo build --target x86_64-unknown-none --release
+
+$(X86_64_KERNEL_ELF): $(X86_64_KERNEL_OBJECTS) $(RUST_SMP_LIB) linker_x86_64.ld
 	@mkdir -p $(dir $@)
-	$(LD) $(X86_64_LDFLAGS) -o $@ $(X86_64_KERNEL_OBJECTS)
+	$(LD) $(X86_64_LDFLAGS) -o $@ $(X86_64_KERNEL_OBJECTS) $(RUST_SMP_LIB)
 	@echo "[OK] x86_64 experimental kernel: $@ ($$(wc -c < $@) byte)"
 
 $(X86_64_KERNEL_BIN): $(X86_64_KERNEL_ELF)
@@ -507,7 +512,7 @@ $(X86_64_USB_IMAGE): $(X86_64_IMAGE)
 	@echo "[OK] x86_64 USB/raw image: $@"
 
 clean:
-	rm -rf $(OBJ_DIR) $(BOOT_DIR)/*.bin *.img kernel.bin kernel.elf kernel64.elf kernel64.bin kernel.tmp
+	rm -rf $(OBJ_DIR) $(BOOT_DIR)/*.bin *.img kernel.bin kernel.elf kernel64.elf kernel64.bin kernel.tmp crates/narcos-smp/target
 
 run-i386: all-i386
 	qemu-system-i386 -m 128M -drive format=raw,file=$(I386_IMAGE) -serial stdio -no-reboot -no-shutdown

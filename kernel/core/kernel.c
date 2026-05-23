@@ -2457,9 +2457,24 @@ void kmain() {
     int graphics_pid;
     int service_pid;
 
+    // Rust SMP Module FFI Declarations
+    extern int smp_init(uint32_t rsdp_addr);
+    extern int smp_get_core_count(void);
+
     serial_init();
     serial_write_line("[boot] kmain");
     boot_log_info_handoff();
+
+    // Initialize Rust SMP/Multi-Core Module
+    const narcos_boot_info_t* info = boot_info_get();
+    if (info) {
+        serial_write_line("[boot] initializing Rust SMP module...");
+        int cores = smp_init(info->rsdp_addr);
+        serial_write("[boot] Rust SMP returned core_count=");
+        serial_write_hex32((uint32_t)cores);
+        serial_write_char('\n');
+    }
+
     arch_init_cpu();
     cpu = cpu_get_info();
     if (!cpu->cpuid_supported || !cpu->pse_supported) {
