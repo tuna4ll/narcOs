@@ -531,16 +531,16 @@ run-net: run-x86_64-net
 run-x86_64: run-x86_64-headless
 
 run-x86_64-headless: all-x86_64
-	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -display none -no-reboot -no-shutdown
+	qemu-system-x86_64 -m 128M -smp 4 -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -display none -no-reboot -no-shutdown
 
 run-iso-x86_64: iso-x86_64
-	qemu-system-x86_64 -m 128M -cdrom $(X86_64_ISO) -boot d -serial stdio -display none -no-reboot -no-shutdown
+	qemu-system-x86_64 -m 128M -smp 4 -cdrom $(X86_64_ISO) -boot d -serial stdio -display none -no-reboot -no-shutdown
 
 run-iso-usb-x86_64: iso-x86_64
-	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_ISO) -serial stdio -display none -no-reboot -no-shutdown
+	qemu-system-x86_64 -m 128M -smp 4 -drive format=raw,file=$(X86_64_ISO) -serial stdio -display none -no-reboot -no-shutdown
 
 run-x86_64-gui: all-x86_64
-	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -no-reboot -no-shutdown
+	qemu-system-x86_64 -m 128M -smp 4 -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -no-reboot -no-shutdown
 
 run-x86_64-net: all-x86_64
-	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -netdev user,id=n0 -device rtl8139,netdev=n0 -no-reboot -no-shutdown
+	qemu-system-x86_64 -m 128M -smp 4 -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -netdev user,id=n0 -device rtl8139,netdev=n0 -no-reboot -no-shutdown
