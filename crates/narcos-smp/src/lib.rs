@@ -58,12 +58,6 @@ pub unsafe extern "C" fn smp_init(rsdp_addr: u32) -> i32 {
         }
     };
 
-    // Store the configuration globally (makes a copy since AcpiConfig is Copy).
-    {
-        let mut global_cfg = CONFIG.lock();
-        *global_cfg = parsed_config;
-    }
-
     let core_count = parsed_config.core_count;
     let lapic_addr = parsed_config.lapic_address;
 
@@ -78,10 +72,18 @@ pub unsafe extern "C" fn smp_init(rsdp_addr: u32) -> i32 {
         log_serial("[smp-err] failed to map local apic mmio region!\n");
         return -1;
     }
-    log_hex("[smp] local apic mapped to virtual address: ", lapic_virt as u32);
+    let lapic_virt_addr = lapic_virt as u32;
+    log_hex("[smp] local apic mapped to virtual address: ", lapic_virt_addr);
+
+    // Store the full configuration (with mapped virtual LAPIC address) globally.
+    {
+        let mut global_cfg = CONFIG.lock();
+        *global_cfg = parsed_config;
+        global_cfg.lapic_virt_address = lapic_virt_addr;
+    }
 
     // Initialize Local APIC on BSP (Bootstrap Processor - Core 0) using the mapped virtual address
-    let lapic = unsafe { LocalApic::new(lapic_virt as u32) };
+    let lapic = unsafe { LocalApic::new(lapic_virt_addr) };
     unsafe { lapic.init_on_core() };
 
     let current_id = unsafe { lapic.get_id() };
@@ -118,14 +120,14 @@ pub extern "C" fn smp_get_core_count() -> i32 {
 /// Returns the LAPIC ID of the calling CPU core.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn smp_get_current_core_id() -> u8 {
-    let lapic_addr = {
+    let lapic_virt = {
         let cfg = CONFIG.lock();
-        cfg.lapic_address
+        cfg.lapic_virt_address
     };
-    if lapic_addr == 0 {
+    if lapic_virt == 0 {
         return 0;
     }
-    let lapic = unsafe { LocalApic::new(lapic_addr) };
+    let lapic = unsafe { LocalApic::new(lapic_virt) };
     unsafe { lapic.get_id() }
 }
 

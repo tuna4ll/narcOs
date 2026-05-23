@@ -34,6 +34,8 @@ pub struct CpuCoreInfo {
 #[derive(Copy, Clone)]
 pub struct AcpiConfig {
     pub lapic_address: u32,
+    /// The mapped virtual address of the LAPIC MMIO region (set after paging_map_physical).
+    pub lapic_virt_address: u32,
     pub cores: [Option<CpuCoreInfo>; 32],
     pub core_count: usize,
 }
@@ -42,6 +44,7 @@ impl AcpiConfig {
     pub const fn empty() -> Self {
         Self {
             lapic_address: 0,
+            lapic_virt_address: 0,
             cores: [None; 32],
             core_count: 0,
         }
