@@ -2465,16 +2465,6 @@ void kmain() {
     serial_write_line("[boot] kmain");
     boot_log_info_handoff();
 
-    // Initialize Rust SMP/Multi-Core Module
-    const narcos_boot_info_t* info = boot_info_get();
-    if (info) {
-        serial_write_line("[boot] initializing Rust SMP module...");
-        int cores = smp_init(info->rsdp_addr);
-        serial_write("[boot] Rust SMP returned core_count=");
-        serial_write_hex32((uint32_t)cores);
-        serial_write_char('\n');
-    }
-
     arch_init_cpu();
     cpu = cpu_get_info();
     if (!cpu->cpuid_supported || !cpu->pse_supported) {
@@ -2499,6 +2489,17 @@ void kmain() {
     serial_write_hex32(paging_kernel_stack_size());
     serial_write_char('\n');
     paging_probe_kernel_vm();
+
+    // Initialize Rust SMP/Multi-Core Module now that paging is fully enabled and RAM is mapped
+    const narcos_boot_info_t* info = boot_info_get();
+    if (info) {
+        serial_write_line("[boot] initializing Rust SMP module...");
+        int cores = smp_init(info->rsdp_addr);
+        serial_write("[boot] Rust SMP returned core_count=");
+        serial_write_hex32((uint32_t)cores);
+        serial_write_char('\n');
+    }
+
     if (init_usermode() != 0) {
         boot_fatal("User memory initialization failed.",
                    "Ring 3 code/data alias mappings could not be established.");
