@@ -91,3 +91,39 @@ bootloader and is not supported by this image yet.
 ```bash
 make clean
 ```
+
+## Multi-Core Symmetric Multiprocessing (SMP) with Rust
+
+narcOs supports Symmetric Multiprocessing (SMP) for `x86_64` using a modern, bare-metal `no_std` Rust static library (`narcos-smp`) integrated directly into the core hybrid C kernel.
+
+### Architecture & Features
+
+1. **Rust Integration:** The SMP subsystem (`crates/narcos-smp`) is compiled as a static library for `x86_64-unknown-none` and linked during the kernel build using `LDFLAGS` with garbage collection (`--gc-sections`) to minimize footprint.
+2. **ACPI Parsing:** Traverses the Root System Description Pointer (RSDP) in high memory and parses the Multiple APIC Description Table (MADT) to retrieve core topologies and Local APIC addresses.
+3. **Paging Integration:** Deferring initialization to post-paging allows parsing ACPI tables placed above the initial 4MB identity-mapped boundary.
+4. **Dynamic MMIO Mapping:** Dynamically maps the Local APIC MMIO physical region (`0xFEE00000`) into virtual memory using the kernel's `paging_map_physical` API to avoid page faults under active paging.
+5. **Core Awakening:** Wakes up inactive Application Processors (APs) by sending `INIT` and `STARTUP` Inter-Processor Interrupts (IPIs) through the Local APIC using the assembly trampoline vector.
+
+### Observing Multi-Core Initialization
+
+Run narcOs in QEMU with multiple cores (default `-smp 4`):
+
+```bash
+make run-x86_64-headless
+```
+
+Expected diagnostic serial outputs:
+
+```text
+[boot] initializing Rust SMP module...
+[smp] starting rust-smp module initialization...
+[acpi] entering parse_acpi_tables
+[smp] acpi successfully parsed
+[smp] physical lapic address: 0xFEE00000
+[smp] mapping local apic mmio region...
+[smp] local apic mapped to virtual address: 0x00A00000
+[smp] local apic enabled on bsp core
+[smp] multiple cpu cores detected! waking up APs...
+[smp] triggered startup sequence on core
+[boot] Rust SMP returned core_count=0x00000004
+```
