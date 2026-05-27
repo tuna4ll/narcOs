@@ -520,6 +520,9 @@ run-iso-usb-i386: iso-i386
 
 run-net-i386: all-i386
 	qemu-system-i386 -m 128M -drive format=raw,file=$(I386_IMAGE) -serial stdio -netdev user,id=n0 -device rtl8139,netdev=n0 -no-reboot -no-shutdown
+run-i386-VNC: all-i386
+	qemu-system-i386 -m 128M -drive format=raw,file=$(I386_IMAGE) -vga std -vnc :1 -netdev user,id=n0 -device rtl8139,netdev=n0 -no-reboot -no-shutdown
+	
 
 run-net: run-x86_64-net
 
@@ -527,6 +530,9 @@ run-x86_64: run-x86_64-headless
 
 run-x86_64-headless: all-x86_64
 	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_IMAGE) -serial stdio -display none -no-reboot -no-shutdown
+
+run-x86_64-VNC: all-x86_64
+	qemu-system-x86_64 -m 128M -drive format=raw,file=$(X86_64_IMAGE) -vga std -vnc :1 -no-reboot -no-shutdown
 
 run-iso-x86_64: iso-x86_64
 	qemu-system-x86_64 -m 128M -cdrom $(X86_64_ISO) -boot d -serial stdio -display none -no-reboot -no-shutdown
