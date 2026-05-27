@@ -1,7 +1,9 @@
 [BITS 16]
 [ORG 0x7C00]
+
 STAGE2_LOAD_SEG equ 0x0000
 STAGE2_LOAD_OFF equ 0x7E00
+
 %ifndef STAGE2_SECTORS
 %define STAGE2_SECTORS 16
 %endif
@@ -17,15 +19,20 @@ STAGE2_LOAD_OFF equ 0x7E00
 %ifndef PARTITION_SECTORS
 %define PARTITION_SECTORS (DISK_IMAGE_SECTORS - PARTITION_START_LBA)
 %endif
+
 BOOT_DISK_BASE_ADDR equ 0x7DF0
+
 start:
     cli
+
     xor ax, ax
     mov ds, ax
     mov es, ax
     mov ss, ax
     mov sp, 0x7C00
+
     sti
+
     mov [boot_drive], dl
     mov ax, 0x0003
     int 0x10
@@ -161,6 +168,7 @@ chs_read_one:
     pop bx
     pop ax
     ret
+
 boot_drive  db 0
 disk_spt    db 18
 disk_heads  db 2
@@ -168,6 +176,7 @@ chs_lba     dw 0
 chs_dst     dw 0
 chs_left    dw 0
 chs_saved_bx dw 0
+
 align 4
 dap:
     db 0x10, 0x00
@@ -181,9 +190,11 @@ dap_lba_lo:
     dd 1
 dap_lba_hi:
     dd 0
+
 msg_boot    db '[BOOT] NarcOs Stage1 loading...', 0x0D, 0x0A, 0
 msg_ok      db '[BOOT] Stage2 loaded. Jumping...', 0x0D, 0x0A, 0
 msg_err     db '[ERR]  Disk read failed!', 0x0D, 0x0A, 0
+
 times 446-($-$$) db 0
     db 0x80
     db 0x01, 0x01, 0x00
@@ -191,5 +202,6 @@ times 446-($-$$) db 0
     db 0xFE, 0xFF, 0xFF
     dd PARTITION_START_LBA
     dd PARTITION_SECTORS
+
 times 510-($-$$) db 0
 dw 0xAA55
