@@ -3,11 +3,13 @@
 #include "storage.h"
 #include "memory_alloc.h"
 #include "serial.h"
+
 extern void vga_print(const char* str);
 extern void vga_print_color(const char* str, uint8_t color);
 extern void vga_println(const char* str);
 extern void vga_print_int(int num);
 extern void vga_print_int_hex(uint32_t n, char* buf);
+
 #define DIR_SECTOR 3072
 #define DIR_SECTOR_COUNT 8
 #define DATA_START_SECTOR 4096
@@ -20,6 +22,7 @@ extern void vga_print_int_hex(uint32_t n, char* buf);
 #define NARCOS_BOOT_INFO_VERSION_WITH_INITRD_ADDR 4U
 #define NARCOS_BOOT_INFO_INITRD_ADDR_SIZE 104U
 #define FS_BOOT_INITRD_MISS (-2)
+
 disk_fs_node_t dir_cache[MAX_FILES];
 uint8_t sector_buffer[512];
 int current_dir_index = -1;
