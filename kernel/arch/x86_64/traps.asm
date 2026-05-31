@@ -184,8 +184,6 @@ x64_run_user_task:
     mov ax, [r11 + TF_USER_SS]
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
 
     push qword [r11 + TF_USER_SS]
     push qword [r11 + TF_USER_RSP]
@@ -268,8 +266,6 @@ x64_isr_syscall:
     mov ax, [rsp + TF_USER_SS]
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
 
     add rsp, X64_FRAME_META_SIZE
     POP_GPRS

@@ -115,6 +115,10 @@ void arch_enter_user(arch_trap_frame_t* frame) {
     run_user_task(frame);
 }
 
+void arch_set_user_fs_base(uintptr_t fs_base) {
+    (void)fs_base;
+}
+
 void arch_user_frame_init(arch_trap_frame_t* frame, uint32_t entry_point, uint32_t user_stack_top) {
     if (!frame) return;
 
@@ -165,4 +169,6 @@ void arch_syscall_capture(const arch_trap_frame_t* frame, arch_syscall_state_t* 
     state->arg1 = frame->ecx;
     state->arg2 = frame->edx;
     state->arg3 = frame->esi;
+    state->arg4 = frame->edi;
+    state->arg5 = frame->ebp;
 }

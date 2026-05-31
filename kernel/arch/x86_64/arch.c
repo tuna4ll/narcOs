@@ -5,8 +5,17 @@
 #include "interrupts.h"
 #include "x64_paging.h"
 
+#define X64_MSR_FS_BASE 0xC0000100U
+
 extern void x64_process_switch(uintptr_t* old_sp, uintptr_t new_sp);
 extern void x64_run_user_task(void);
+
+static void x64_write_msr_local(uint32_t msr, uint64_t value) {
+    uint32_t low = (uint32_t)(value & 0xFFFFFFFFULL);
+    uint32_t high = (uint32_t)(value >> 32);
+
+    __asm__ volatile("wrmsr" : : "c"(msr), "a"(low), "d"(high) : "memory");
+}
 
 void arch_init_cpu(void) {
     x64_cpu_init();
@@ -39,6 +48,10 @@ void arch_set_kernel_stack(uintptr_t stack_top) {
 
 void arch_switch_task(uintptr_t* old_sp, uintptr_t new_sp) {
     x64_process_switch(old_sp, new_sp);
+}
+
+void arch_set_user_fs_base(uintptr_t fs_base) {
+    x64_write_msr_local(X64_MSR_FS_BASE, (uint64_t)fs_base);
 }
 
 void arch_enter_user(arch_trap_frame_t* frame) {
@@ -108,4 +121,6 @@ void arch_syscall_capture(const arch_trap_frame_t* frame, arch_syscall_state_t* 
     state->arg1 = frame->rcx;
     state->arg2 = frame->rdx;
     state->arg3 = frame->rsi;
+    state->arg4 = frame->rdi;
+    state->arg5 = frame->r8;
 }

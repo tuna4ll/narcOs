@@ -1,23 +1,26 @@
-#include "user_lib.h"
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 int main(int argc, char** argv) {
     int exit_code = 0;
 
     if (argc < 2) {
-        userlib_print_error("Usage: kill <pid> [pid...]");
+        fputs("Usage: kill <pid> [pid...]\n", stderr);
         return 1;
     }
 
     for (int i = 1; i < argc; i++) {
-        int pid = 0;
+        char* end = 0;
+        long pid = strtol(argv[i], &end, 10);
 
-        if (userlib_parse_i32(argv[i], &pid) != 0 || pid <= 0) {
-            userlib_print_error("kill: invalid pid");
+        if (!argv[i] || argv[i][0] == '\0' || !end || *end != '\0' || pid <= 0) {
+            fputs("kill: invalid pid\n", stderr);
             exit_code = 1;
             continue;
         }
-        if (user_kill(pid) != 0) {
-            userlib_print_error("kill: syscall failed");
+        if (kill((pid_t)pid, SIGTERM) != 0) {
+            fputs("kill: syscall failed\n", stderr);
             exit_code = 1;
         }
     }

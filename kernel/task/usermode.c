@@ -308,6 +308,12 @@ static int build_process_initial_stack(process_t* proc, const exec_image_t* imag
         if (sp < (uintptr_t)image->stack_base + sizeof(uint64_t)) return -1;
         sp -= sizeof(uint64_t);
         *(uint64_t*)sp = 0ULL;
+        if (sp < (uintptr_t)image->stack_base + sizeof(uint64_t)) return -1;
+        sp -= sizeof(uint64_t);
+        *(uint64_t*)sp = 0ULL;
+        if (sp < (uintptr_t)image->stack_base + sizeof(uint64_t)) return -1;
+        sp -= sizeof(uint64_t);
+        *(uint64_t*)sp = 0ULL;
         for (int i = proc->user_argc - 1; i >= 0; i--) {
             if (sp < (uintptr_t)image->stack_base + sizeof(uint64_t)) return -1;
             sp -= sizeof(uint64_t);
@@ -322,6 +328,12 @@ static int build_process_initial_stack(process_t* proc, const exec_image_t* imag
     }
 
     sp &= ~(uintptr_t)0x3U;
+    if (sp < (uintptr_t)image->stack_base + 4U) return -1;
+    sp -= 4U;
+    *(uint32_t*)sp = 0U;
+    if (sp < (uintptr_t)image->stack_base + 4U) return -1;
+    sp -= 4U;
+    *(uint32_t*)sp = 0U;
     if (sp < (uintptr_t)image->stack_base + 4U) return -1;
     sp -= 4U;
     *(uint32_t*)sp = 0U;

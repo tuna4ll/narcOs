@@ -1,6 +1,5 @@
-#include "user_lib.h"
+#include <stdio.h>
 
 int main(void) {
-    user_clear_screen();
-    return 0;
+    return fputs("\033[2J\033[H", stdout) >= 0 ? 0 : 1;
 }

@@ -1,5 +1,8 @@
 #include "process_api.h"
-#include "user_lib.h"
+#include "user_abi.h"
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 #define NEOFETCH_PROCESS_MAX 16
 #define NEOFETCH_LOGO_WIDTH 30U
@@ -57,13 +60,13 @@ static uint32_t neofetch_output_len = 0;
 static int append_bytes(const char* text, uint32_t len) {
     if (!text && len != 0U) return -1;
     if (neofetch_output_len + len > NEOFETCH_OUTPUT_MAX) return -1;
-    userlib_memcpy(neofetch_output + neofetch_output_len, text, len);
+    memcpy(neofetch_output + neofetch_output_len, text, len);
     neofetch_output_len += len;
     return 0;
 }
 
 static int print_text(const char* text) {
-    return append_bytes(text, (uint32_t)userlib_strlen(text));
+    return append_bytes(text, (uint32_t)strlen(text));
 }
 
 static int print_newline(void) {
@@ -72,8 +75,20 @@ static int print_newline(void) {
 
 static int print_uint(uint32_t value) {
     char digits[16];
-    uint32_t len = userlib_format_u32(digits, value);
+    uint32_t len = 0;
 
+    if (value == 0U) {
+        digits[len++] = '0';
+    } else {
+        char reversed[16];
+        while (value != 0U && len < (uint32_t)sizeof(reversed)) {
+            reversed[len++] = (char)('0' + (value % 10U));
+            value /= 10U;
+        }
+        for (uint32_t i = 0; i < len; i++) {
+            digits[i] = reversed[len - i - 1U];
+        }
+    }
     return append_bytes(digits, len);
 }
 
@@ -120,7 +135,7 @@ static int print_uptime_value(uint32_t ticks) {
 }
 
 static int print_logo_prefix(const char* logo, const char* color) {
-    uint32_t len = (uint32_t)userlib_strlen(logo);
+    uint32_t len = (uint32_t)strlen(logo);
 
     if (color && print_text(color) != 0) return -1;
     if (print_text(logo) != 0) return -1;
@@ -190,9 +205,9 @@ static int print_uptime_line(const char* logo, const char* color, uint32_t ticks
 
 static int print_pid_line(const char* logo, const char* color) {
     if (print_value_prefix(logo, color, "PID") != 0) return -1;
-    if (print_int(user_getpid()) != 0) return -1;
+    if (print_int(getpid()) != 0) return -1;
     if (print_text(" (parent ") != 0) return -1;
-    if (print_int(user_getppid()) != 0) return -1;
+    if (print_int(getppid()) != 0) return -1;
     if (print_text(")") != 0) return -1;
     return print_value_suffix();
 }
@@ -227,7 +242,7 @@ static int print_network_line(const char* logo, const char* color) {
 static int print_cwd_line(const char* logo, const char* color) {
     char cwd[128];
 
-    if (user_fs_get_cwd(cwd, sizeof(cwd)) != 0) {
+    if (!getcwd(cwd, sizeof(cwd))) {
         return print_static_line(logo, color, "CWD", "unknown");
     }
     if (print_value_prefix(logo, color, "CWD") != 0) return -1;
@@ -354,5 +369,5 @@ int main(void) {
     if (print_color_blocks("", 0, 0) != 0) return 1;
     if (print_color_blocks("", 0, 1) != 0) return 1;
 
-    return userlib_write_all(USER_STDOUT, neofetch_output, neofetch_output_len) == 0 ? 0 : 1;
+    return fwrite(neofetch_output, 1, neofetch_output_len, stdout) == neofetch_output_len ? 0 : 1;
 }

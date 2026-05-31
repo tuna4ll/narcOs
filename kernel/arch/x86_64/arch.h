@@ -63,6 +63,7 @@ typedef struct {
     void* user_trap_stack_base;
     uint32_t user_trap_stack_pages;
     uintptr_t user_trap_stack_top;
+    uintptr_t user_fs_base;
     uintptr_t address_space_root;
     arch_trap_frame_t user_frame;
 } arch_process_state_t;
@@ -73,6 +74,8 @@ typedef struct {
     uint64_t arg1;
     uint64_t arg2;
     uint64_t arg3;
+    uint64_t arg4;
+    uint64_t arg5;
 } arch_syscall_state_t;
 
 void arch_init_cpu(void);
@@ -85,6 +88,7 @@ uintptr_t arch_read_fault_address(void);
 void arch_set_kernel_stack(uintptr_t stack_top);
 void arch_switch_task(uintptr_t* old_sp, uintptr_t new_sp);
 void arch_enter_user(arch_trap_frame_t* frame);
+void arch_set_user_fs_base(uintptr_t fs_base);
 
 void arch_user_frame_init(arch_trap_frame_t* frame, uintptr_t entry_point, uintptr_t user_stack_top);
 void arch_user_frame_set_exec_class(arch_trap_frame_t* frame, uint8_t image_class);

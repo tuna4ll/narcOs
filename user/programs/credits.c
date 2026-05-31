@@ -1,4 +1,6 @@
-#include "user_lib.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #define C_RESET "\033[0m"
 #define C_DIM "\033[90m"
@@ -47,15 +49,15 @@ static const char* logo_color_for_line(uint32_t line) {
 }
 
 static int print_text(const char* text) {
-    return userlib_print(text);
+    return fputs(text, stdout) >= 0 ? 0 : -1;
 }
 
 static int print_newline(void) {
-    return userlib_write_all(USER_STDOUT, "\n", 1U);
+    return putchar('\n') == EOF ? -1 : 0;
 }
 
 static int print_logo_prefix(const char* logo, const char* color) {
-    uint32_t len = (uint32_t)userlib_strlen(logo);
+    uint32_t len = (uint32_t)strlen(logo);
 
     if (color && print_text(color) != 0) return -1;
     if (print_text(logo) != 0) return -1;

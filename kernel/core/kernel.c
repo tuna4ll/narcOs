@@ -2045,10 +2045,30 @@ void gpf_handler(arch_trap_frame_t* frame) {
 }
 
 void page_fault_handler(arch_trap_frame_t* frame) {
+    process_t* current = process_current();
+    uint64_t fault_addr = arch_read_fault_address();
+
+    if (frame && (frame->cs & 0x3U) == 0x3U &&
+        current && current->kind == PROCESS_KIND_USER) {
+        serial_write("[trap] user page fault: terminating pid=");
+        serial_write_hex32((uint32_t)current->pid);
+        serial_write(" fault=");
+        serial_write_hex64(fault_addr);
+        serial_write(" ip=");
+        serial_write_hex64((uint64_t)arch_frame_user_ip(frame));
+        serial_write_char('\n');
+
+        vga_print_color("user page fault: killed process ", 0x0C);
+        vga_print_int(current->pid);
+        vga_println("");
+        process_exit_current(-14);
+        return;
+    }
+
     panic_log_current_process();
     process_debug_dump("page-fault");
     panic_simple_exception("page fault", "!!! NARC-OS PAGE FAULT !!!", 0x1A0000,
-                           "Fault Addr:", arch_read_fault_address(), frame);
+                           "Fault Addr:", fault_addr, frame);
 }
 
 void invalid_opcode_handler(arch_trap_frame_t* frame) {
@@ -2677,6 +2697,28 @@ void kmain() {
         boot_fatal("Scheduler bootstrap failed.",
                    "Required kernel service tasks could not be created with the current memory map.");
     }
+#if defined(NARCOS_AUTORUN_POSIX_SMOKE)
+    {
+        static const char* posix_smoke_argv[] = {"/bin/posix_smoke"};
+        int pid = process_create_user("/bin/posix_smoke", posix_smoke_argv, 1, 0U);
+        if (pid < 0) {
+            serial_write_line("[boot] posix_smoke autorun spawn failed");
+        } else {
+            serial_write_line("[boot] posix_smoke autorun spawned");
+        }
+    }
+#endif
+#if defined(NARCOS_AUTORUN_TLS_SMOKE)
+    {
+        static const char* tls_smoke_argv[] = {"/bin/tls_tools", "tls-test"};
+        int pid = process_create_user("/bin/tls_tools", tls_smoke_argv, 2, 0U);
+        if (pid < 0) {
+            serial_write_line("[boot] tls smoke autorun spawn failed");
+        } else {
+            serial_write_line("[boot] tls smoke autorun spawned");
+        }
+    }
+#endif
     if (screen_is_graphics_enabled()) {
         serial_write_line("[boot] legacy desktop bootstrap");
     } else {

@@ -1,4 +1,4 @@
-#include "user_lib.h"
+#include <stdio.h>
 
 static const char* help_lines[] = {
     "NarcOs Shell",
@@ -17,6 +17,7 @@ static const char* help_lines[] = {
     "  procdump - Dump process table to serial log",
     "  proc_test - Run waitpid/zombie self-test",
     "  pipe_test - Run pipe scheduling self-test",
+    "  args_smoke - Run argc/argv spawn/exec self-test",
     "  credits - Show project credits",
     "  echo    - Print arguments",
     "  spawn   - Launch an external process",
@@ -52,10 +53,10 @@ static const char* help_lines[] = {
 };
 
 int main(void) {
-    uint32_t count = (uint32_t)(sizeof(help_lines) / sizeof(help_lines[0]));
+    int count = (int)(sizeof(help_lines) / sizeof(help_lines[0]));
 
-    for (uint32_t i = 0; i < count; i++) {
-        if (userlib_println(help_lines[i]) != 0) return 1;
+    for (int i = 0; i < count; i++) {
+        if (puts(help_lines[i]) < 0) return 1;
     }
     return 0;
 }

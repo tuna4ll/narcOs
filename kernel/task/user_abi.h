@@ -125,6 +125,34 @@ static inline int user_pipe(int out_fds[2]) {
     return (int)user_syscall1(SYS_PIPE, (uintptr_t)out_fds);
 }
 
+static inline int user_openat(int dirfd, const char* path, uint32_t flags, uint32_t mode) {
+    return (int)user_syscall4(SYS_OPENAT, (uintptr_t)dirfd, (uintptr_t)path, flags, mode);
+}
+
+static inline int user_lseek(int fd, int32_t offset, int whence) {
+    return (int)user_syscall3(SYS_LSEEK, (uintptr_t)fd, (uintptr_t)offset, (uintptr_t)whence);
+}
+
+static inline int user_fstat(int fd, narcos_stat_t* out_stat) {
+    return (int)user_syscall2(SYS_FSTAT, (uintptr_t)fd, (uintptr_t)out_stat);
+}
+
+static inline int user_stat(const char* path, narcos_stat_t* out_stat) {
+    return (int)user_syscall2(SYS_STAT, (uintptr_t)path, (uintptr_t)out_stat);
+}
+
+static inline void* user_brk(void* addr) {
+    return (void*)(uintptr_t)user_syscall1(SYS_BRK, (uintptr_t)addr);
+}
+
+static inline int user_clock_gettime(int clock_id, narcos_timespec_t* out_time) {
+    return (int)user_syscall2(SYS_CLOCK_GETTIME, (uintptr_t)clock_id, (uintptr_t)out_time);
+}
+
+static inline int user_nanosleep(const narcos_timespec_t* request, narcos_timespec_t* remain) {
+    return (int)user_syscall2(SYS_NANOSLEEP, (uintptr_t)request, (uintptr_t)remain);
+}
+
 static inline int user_gui_create_window(const gui_create_window_params_t* params) {
     return (int)user_syscall1(SYS_GUI_CREATE_WINDOW, (uintptr_t)params);
 }

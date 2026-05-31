@@ -253,13 +253,6 @@ static int fs_storage_write_sector(uint32_t lba, const uint8_t* buffer) {
 }
 
 #define FS_DISTINCT_USER_PROGRAMS(X) \
-    X(hello) \
-    X(ps) \
-    X(cat) \
-    X(echo) \
-    X(kill) \
-    X(proc_test) \
-    X(pipe_test) \
     X(credits) \
     X(neofetch) \
     X(desktop) \
@@ -323,6 +316,11 @@ static const fs_packaged_binary_t fs_packaged_binaries[] = {
     FS_DISTINCT_USER_PROGRAMS(FS_PACKAGED_BINARY_ENTRY)
     FS_CORE_TOOL_ALIASES(FS_PACKAGED_BINARY_ALIAS)
     FS_TLS_TOOL_ALIASES(FS_PACKAGED_BINARY_ALIAS)
+#if UINTPTR_MAX > 0xFFFFFFFFU
+    { "/bin/tls-test", _binary_obj_x86_64_user_bin_tls_tools_start, _binary_obj_x86_64_user_bin_tls_tools_end },
+#else
+    { "/bin/tls-test", _binary_obj_i386_user_bin_tls_tools_start, _binary_obj_i386_user_bin_tls_tools_end },
+#endif
 };
 
 #undef FS_PACKAGED_BINARY_ALIAS
@@ -442,7 +440,7 @@ static void fs_sync_packaged_binaries() {
     }
 }
 
-#if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN)
+#if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN) || defined(NARCOS_DISK_POSIX_SMOKE)
 static int fs_read_disk_blob(uint32_t src_lba, size_t len, void* buffer, size_t offset, size_t max_len) {
     uint8_t* bytes = (uint8_t*)buffer;
     size_t read_len;
@@ -515,6 +513,13 @@ static int fs_disk_blob_info_for_path(const char* path, uint32_t* out_lba, size_
         return 1;
     }
 #endif
+#if defined(NARCOS_DISK_POSIX_SMOKE)
+    if (strcmp(path, "/bin/posix_smoke") == 0) {
+        if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_POSIX_SMOKE_LBA;
+        if (out_len) *out_len = (size_t)NARCOS_DISK_POSIX_SMOKE_SIZE;
+        return 1;
+    }
+#endif
     return 0;
 }
 
@@ -531,6 +536,13 @@ static int fs_disk_blob_info_for_idx(int idx, uint32_t* out_lba, size_t* out_len
     if (idx == fs_find_node_internal("/assets/doom1.wad")) {
         if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_DOOM1_WAD_LBA;
         if (out_len) *out_len = (size_t)NARCOS_DISK_DOOM1_WAD_SIZE;
+        return 1;
+    }
+#endif
+#if defined(NARCOS_DISK_POSIX_SMOKE)
+    if (idx == fs_find_node_internal("/bin/posix_smoke")) {
+        if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_POSIX_SMOKE_LBA;
+        if (out_len) *out_len = (size_t)NARCOS_DISK_POSIX_SMOKE_SIZE;
         return 1;
     }
 #endif
@@ -563,7 +575,7 @@ static int fs_disk_blob_info_for_idx(int idx, uint32_t* out_lba, size_t* out_len
 
 #endif
 
-#if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN)
+#if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN) || defined(NARCOS_DISK_POSIX_SMOKE)
 static int fs_mount_disk_blob(const char* path, uint32_t src_lba, size_t len) {
     int idx;
     uint32_t sectors;
@@ -641,6 +653,27 @@ static void fs_sync_disk_doom1_wad(void) {
         vga_print_color("[fs] doom1.wad mount failed\n", 0x0C);
     } else {
         vga_print_color("[fs] doom1.wad mounted at /assets/doom1.wad\n", 0x0A);
+    }
+}
+#endif
+
+#if defined(NARCOS_DISK_POSIX_SMOKE)
+static void fs_sync_disk_posix_smoke(void) {
+    int status;
+
+    (void)fs_create_dir("/bin");
+    status = fs_mount_disk_blob("/bin/posix_smoke",
+                               (uint32_t)NARCOS_DISK_POSIX_SMOKE_LBA,
+                               (size_t)NARCOS_DISK_POSIX_SMOKE_SIZE);
+    if (status != 0) {
+        serial_write("[fs] disk posix_smoke mount failed len=");
+        serial_write_hex32((uint32_t)NARCOS_DISK_POSIX_SMOKE_SIZE);
+        serial_write(" lba=");
+        serial_write_hex32((uint32_t)NARCOS_DISK_POSIX_SMOKE_LBA);
+        serial_write_char('\n');
+        vga_print_color("[fs] posix_smoke mount failed\n", 0x0C);
+    } else {
+        vga_print_color("[fs] posix_smoke mounted at /bin/posix_smoke\n", 0x0A);
     }
 }
 #endif
@@ -833,6 +866,9 @@ void init_fs() {
 #if defined(NARCOS_DISK_DOOM1_WAD)
     fs_sync_disk_doom1_wad();
 #endif
+#if defined(NARCOS_DISK_POSIX_SMOKE)
+    fs_sync_disk_posix_smoke();
+#endif
     return;
 #endif
 
@@ -845,6 +881,9 @@ void init_fs() {
 #endif
 #if defined(NARCOS_DISK_DOOM1_WAD)
     fs_sync_disk_doom1_wad();
+#endif
+#if defined(NARCOS_DISK_POSIX_SMOKE)
+    fs_sync_disk_posix_smoke();
 #endif
 }
 int fs_create_file(const char* name) {
@@ -1220,11 +1259,20 @@ void fs_list_dir() {
 }
 
 int fs_list_dir_entries(disk_fs_node_t* out_entries, int max_entries) {
+    return fs_list_dir_entries_at(current_dir_index, out_entries, max_entries);
+}
+
+int fs_list_dir_entries_at(int dir_idx, disk_fs_node_t* out_entries, int max_entries) {
     int count = 0;
+    disk_fs_node_t dir;
 
     if (!out_entries || max_entries <= 0) return -1;
+    if (dir_idx != FS_ROOT_INDEX &&
+        (fs_get_node_info(dir_idx, &dir) != 0 || dir.flags != FS_NODE_DIR)) {
+        return -1;
+    }
     for (int i = 0; i < MAX_FILES && count < max_entries; i++) {
-        if (dir_cache[i].flags == 0 || dir_cache[i].parent_index != current_dir_index) continue;
+        if (dir_cache[i].flags == 0 || dir_cache[i].parent_index != dir_idx) continue;
         out_entries[count++] = dir_cache[i];
     }
     return count;

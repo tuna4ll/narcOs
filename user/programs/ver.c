@@ -1,5 +1,5 @@
-#include "user_lib.h"
+#include <stdio.h>
 
 int main(void) {
-    return userlib_println("NarcOs") == 0 ? 0 : 1;
+    return puts("NarcOs") >= 0 ? 0 : 1;
 }

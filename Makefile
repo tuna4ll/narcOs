@@ -13,6 +13,9 @@ BOOT_DIR = boot
 KERN_DIR = kernel
 USER_DIR = user
 ASSET_DIR = assets
+MUSL_DIR ?= user/ports/musl
+MUSL_OVERLAY_TOOL = tools/apply_musl_narcos_overlay.py
+MUSL_PREFIX = /usr
 VBE_WIDTH ?= 1024
 VBE_HEIGHT ?= 768
 BOOT_MANIFEST_LBA = 17
@@ -20,8 +23,9 @@ KERNEL_START_LBA = 18
 DISK_IMAGE_SECTORS = 49152
 
 KERNEL_DIRS = $(shell find $(KERN_DIR) -type d | sort)
-USER_PROGRAMS = hello ps cat echo kill proc_test pipe_test credits neofetch desktop explorer narcpad settings snake doom core_tools tls_tools
-USER_EMBED_PROGRAMS = $(filter-out doom,$(USER_PROGRAMS))
+USER_PROGRAMS = hello ps cat echo kill proc_test pipe_test credits neofetch desktop explorer narcpad settings snake doom core_tools tls_tools posix_smoke args_smoke clear date dns help http ls net netdemo ping pwd time uptime ver
+USER_EMBED_PROGRAMS = neofetch credits desktop explorer narcpad settings snake core_tools tls_tools
+FS_SEED_PROGRAMS = $(filter-out doom posix_smoke,$(USER_PROGRAMS))
 USER_PROGRAM_HEADERS = $(shell find $(USER_DIR)/programs -name '*.h' 2>/dev/null)
 DOOM1_WAD = $(wildcard $(DOOM_PORT_DIR)/doom1.wad)
 DOOM_BIN_LBA = 8192
@@ -61,10 +65,23 @@ X86_64_DOOM_CFLAGS = $(DOOM_CFLAGS) -DNARCOS_DOOM_NO_FLOAT
 KERNEL_INCLUDE_FLAGS = $(addprefix -I,$(KERNEL_DIRS))
 COMMON_CFLAGS = -ffreestanding -fno-pie -fno-pic -fno-stack-protector -fcf-protection=none -fno-builtin -fno-strict-aliasing -Wall -Wextra
 COMMON_USER_CFLAGS = -ffreestanding -fno-pie -fno-pic -fno-stack-protector -fcf-protection=none -fno-builtin -fno-strict-aliasing -Wall -Wextra -I$(USER_DIR)/include
+ifeq ($(AUTORUN_POSIX_SMOKE),1)
+COMMON_CFLAGS += -DNARCOS_AUTORUN_POSIX_SMOKE=1
+endif
+ifeq ($(AUTORUN_TLS_SMOKE),1)
+COMMON_CFLAGS += -DNARCOS_AUTORUN_TLS_SMOKE=1
+endif
 
 I386_OBJ_DIR = $(OBJ_DIR)/i386
+I386_GCC_INCLUDE_DIR = $(shell $(CC) -m32 -print-file-name=include)
+I386_MUSL_BUILD = $(I386_OBJ_DIR)/musl-build
+I386_MUSL_DEST = $(I386_OBJ_DIR)/musl-root
+I386_MUSL_INCLUDE = $(I386_MUSL_DEST)$(MUSL_PREFIX)/include
+I386_MUSL_LIB = $(I386_MUSL_DEST)$(MUSL_PREFIX)/lib
+I386_MUSL_LIBC = $(I386_MUSL_LIB)/libc.a
+I386_MUSL_CRT1 = $(I386_OBJ_DIR)/user/musl-crt1.o
 I386_CFLAGS = -m32 $(COMMON_CFLAGS) $(KERNEL_INCLUDE_FLAGS) -mpreferred-stack-boundary=2 -mno-red-zone -Os -fomit-frame-pointer
-I386_USER_CFLAGS = -m32 $(COMMON_USER_CFLAGS) $(KERNEL_INCLUDE_FLAGS) -mpreferred-stack-boundary=2 -mno-red-zone -O2 -fomit-frame-pointer
+I386_USER_CFLAGS = -m32 $(COMMON_USER_CFLAGS) $(KERNEL_INCLUDE_FLAGS) -nostdinc -isystem $(I386_MUSL_INCLUDE) -isystem $(I386_GCC_INCLUDE_DIR) -mpreferred-stack-boundary=2 -mno-red-zone -O2 -fomit-frame-pointer
 I386_LDFLAGS = -m elf_i386 -T linker_i386.ld -nostdlib -s --strip-all
 I386_USER_LDFLAGS = -m elf_i386 -T $(USER_DIR)/linker.ld -nostdlib -s --strip-all
 I386_C_SOURCES = $(filter-out \
@@ -97,15 +114,21 @@ I386_DESKTOP_ASSET_BG_RGB = $(I386_OBJ_DIR)/user/assets/desktop_bg.rgb
 I386_DESKTOP_ASSET_BG_OBJECT = $(I386_OBJ_DIR)/user/assets/desktop_bg.o
 I386_USER_CRT_OBJECT = $(I386_OBJ_DIR)/user/crt0.o
 I386_DOOM_BINARY = $(I386_OBJ_DIR)/user/bin/doom
+I386_POSIX_SMOKE_BINARY = $(I386_OBJ_DIR)/user/bin/posix_smoke
 I386_DOOM_BIN_SIZE = $(shell test -f $(I386_DOOM_BINARY) && wc -c < $(I386_DOOM_BINARY) || echo 0)
 I386_DOOM_BIN_SECTORS = $(shell test -f $(I386_DOOM_BINARY) && echo $$(( ($$(wc -c < $(I386_DOOM_BINARY)) + 511) / 512 )) || echo 0)
+I386_POSIX_SMOKE_SIZE = $(shell test -f $(I386_POSIX_SMOKE_BINARY) && wc -c < $(I386_POSIX_SMOKE_BINARY) || echo 0)
+I386_POSIX_SMOKE_SECTORS = $(shell test -f $(I386_POSIX_SMOKE_BINARY) && echo $$(( ($$(wc -c < $(I386_POSIX_SMOKE_BINARY)) + 511) / 512 )) || echo 0)
 I386_DOOM1_WAD_LBA = $(shell echo $$(( $(DOOM_BIN_LBA) + $(I386_DOOM_BIN_SECTORS) )))
 I386_DOOM1_WAD_END_LBA = $(shell echo $$(( $(I386_DOOM1_WAD_LBA) + $(DOOM1_WAD_SECTORS) )))
-I386_INITRD_END_LBA = $(shell doom_end=$$(( $(DOOM_BIN_LBA) + $(I386_DOOM_BIN_SECTORS) )); end=$$doom_end; wad_secs=$(DOOM1_WAD_SECTORS); if [ $$wad_secs -gt 0 ]; then wad_end=$(I386_DOOM1_WAD_END_LBA); if [ $$wad_end -gt $$end ]; then end=$$wad_end; fi; fi; echo $$end)
+I386_PAYLOAD_BASE_END_LBA = $(shell doom_end=$$(( $(DOOM_BIN_LBA) + $(I386_DOOM_BIN_SECTORS) )); end=$$doom_end; wad_secs=$(DOOM1_WAD_SECTORS); if [ $$wad_secs -gt 0 ]; then wad_end=$(I386_DOOM1_WAD_END_LBA); if [ $$wad_end -gt $$end ]; then end=$$wad_end; fi; fi; echo $$end)
+I386_POSIX_SMOKE_LBA = $(I386_PAYLOAD_BASE_END_LBA)
+I386_INITRD_END_LBA = $(shell echo $$(( $(I386_POSIX_SMOKE_LBA) + $(I386_POSIX_SMOKE_SECTORS) )))
 I386_INITRD_SECTORS = $(shell end=$(I386_INITRD_END_LBA); if [ $$end -gt $(DOOM_BIN_LBA) ]; then echo $$(( $$end - $(DOOM_BIN_LBA) )); else echo 0; fi)
 I386_INITRD_SIZE = $(shell echo $$(( $(I386_INITRD_SECTORS) * 512 )))
 I386_DOOM1_WAD_CFLAGS = $(if $(DOOM1_WAD),-DNARCOS_DISK_DOOM1_WAD=1 -DNARCOS_DISK_DOOM1_WAD_LBA=$(I386_DOOM1_WAD_LBA) -DNARCOS_DISK_DOOM1_WAD_SIZE=$(DOOM1_WAD_SIZE),)
-I386_DISK_PAYLOAD_CFLAGS = -DNARCOS_DISK_DOOM_BIN=1 -DNARCOS_DISK_DOOM_BIN_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_DOOM_BIN_SIZE=$(I386_DOOM_BIN_SIZE) -DNARCOS_DISK_INITRD_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_INITRD_SIZE=$(I386_INITRD_SIZE) -DNARCOS_DISK_INITRD_ADDR=0x00A00000 $(I386_DOOM1_WAD_CFLAGS)
+I386_POSIX_SMOKE_CFLAGS = -DNARCOS_DISK_POSIX_SMOKE=1 -DNARCOS_DISK_POSIX_SMOKE_LBA=$(I386_POSIX_SMOKE_LBA) -DNARCOS_DISK_POSIX_SMOKE_SIZE=$(I386_POSIX_SMOKE_SIZE)
+I386_DISK_PAYLOAD_CFLAGS = -DNARCOS_DISK_DOOM_BIN=1 -DNARCOS_DISK_DOOM_BIN_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_DOOM_BIN_SIZE=$(I386_DOOM_BIN_SIZE) -DNARCOS_DISK_INITRD_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_INITRD_SIZE=$(I386_INITRD_SIZE) -DNARCOS_DISK_INITRD_ADDR=0x00A00000 $(I386_DOOM1_WAD_CFLAGS) $(I386_POSIX_SMOKE_CFLAGS)
 I386_KERNEL_OBJECTS = $(I386_ASM_OBJECTS) $(I386_C_OBJECTS) $(I386_USER_EMBED_OBJECTS) $(I386_ASSET_BG_OBJECT) $(I386_ASSET_LOGO_OBJECT)
 I386_BOOT_BIN = $(I386_OBJ_DIR)/boot/boot.bin
 I386_STAGE2_BIN = $(I386_OBJ_DIR)/boot/stage2.bin
@@ -118,8 +141,15 @@ I386_ISO = $(I386_OBJ_DIR)/narcos-i386.iso
 I386_USB_IMAGE = $(I386_OBJ_DIR)/narcos-i386-usb.img
 
 X86_64_OBJ_DIR = $(OBJ_DIR)/x86_64
+X86_64_GCC_INCLUDE_DIR = $(shell $(CC) -m64 -print-file-name=include)
+X86_64_MUSL_BUILD = $(X86_64_OBJ_DIR)/musl-build
+X86_64_MUSL_DEST = $(X86_64_OBJ_DIR)/musl-root
+X86_64_MUSL_INCLUDE = $(X86_64_MUSL_DEST)$(MUSL_PREFIX)/include
+X86_64_MUSL_LIB = $(X86_64_MUSL_DEST)$(MUSL_PREFIX)/lib
+X86_64_MUSL_LIBC = $(X86_64_MUSL_LIB)/libc.a
+X86_64_MUSL_CRT1 = $(X86_64_OBJ_DIR)/user/musl-crt1.o
 X86_64_CFLAGS = -m64 $(COMMON_CFLAGS) -I$(KERN_DIR)/arch/x86_64 $(KERNEL_INCLUDE_FLAGS) -mno-red-zone -mgeneral-regs-only -mno-mmx -mno-sse -mno-sse2 -msoft-float -O2 -fomit-frame-pointer
-X86_64_USER_CFLAGS = -m64 $(COMMON_USER_CFLAGS) -I$(KERN_DIR)/arch/x86_64 $(KERNEL_INCLUDE_FLAGS) -mno-red-zone -mgeneral-regs-only -mno-mmx -mno-sse -mno-sse2 -msoft-float -O2 -fomit-frame-pointer
+X86_64_USER_CFLAGS = -m64 $(COMMON_USER_CFLAGS) -I$(KERN_DIR)/arch/x86_64 $(KERNEL_INCLUDE_FLAGS) -nostdinc -isystem $(X86_64_MUSL_INCLUDE) -isystem $(X86_64_GCC_INCLUDE_DIR) -mno-red-zone -mgeneral-regs-only -mno-mmx -mno-sse -mno-sse2 -msoft-float -O2 -fomit-frame-pointer
 X86_64_LDFLAGS = -m elf_x86_64 -T linker_x86_64.ld -nostdlib
 X86_64_ALL_C_SOURCES = $(filter-out $(USER_TLS_SOURCES),$(shell find $(KERN_DIR) -name '*.c' | sort))
 X86_64_C_SOURCES = $(filter-out \
@@ -167,15 +197,21 @@ X86_64_DESKTOP_ASSET_BG_RGB = $(X86_64_OBJ_DIR)/user/assets/desktop_bg.rgb
 X86_64_DESKTOP_ASSET_BG_OBJECT = $(X86_64_OBJ_DIR)/user/assets/desktop_bg.o
 X86_64_USER_CRT_OBJECT = $(X86_64_OBJ_DIR)/user/crt0_x86_64.o
 X86_64_DOOM_BINARY = $(X86_64_OBJ_DIR)/user/bin/doom
+X86_64_POSIX_SMOKE_BINARY = $(X86_64_OBJ_DIR)/user/bin/posix_smoke
 X86_64_DOOM_BIN_SIZE = $(shell test -f $(X86_64_DOOM_BINARY) && wc -c < $(X86_64_DOOM_BINARY) || echo 0)
 X86_64_DOOM_BIN_SECTORS = $(shell test -f $(X86_64_DOOM_BINARY) && echo $$(( ($$(wc -c < $(X86_64_DOOM_BINARY)) + 511) / 512 )) || echo 0)
+X86_64_POSIX_SMOKE_SIZE = $(shell test -f $(X86_64_POSIX_SMOKE_BINARY) && wc -c < $(X86_64_POSIX_SMOKE_BINARY) || echo 0)
+X86_64_POSIX_SMOKE_SECTORS = $(shell test -f $(X86_64_POSIX_SMOKE_BINARY) && echo $$(( ($$(wc -c < $(X86_64_POSIX_SMOKE_BINARY)) + 511) / 512 )) || echo 0)
 X86_64_DOOM1_WAD_LBA = $(shell echo $$(( $(DOOM_BIN_LBA) + $(X86_64_DOOM_BIN_SECTORS) )))
 X86_64_DOOM1_WAD_END_LBA = $(shell echo $$(( $(X86_64_DOOM1_WAD_LBA) + $(DOOM1_WAD_SECTORS) )))
-X86_64_INITRD_END_LBA = $(shell doom_end=$$(( $(DOOM_BIN_LBA) + $(X86_64_DOOM_BIN_SECTORS) )); end=$$doom_end; wad_secs=$(DOOM1_WAD_SECTORS); if [ $$wad_secs -gt 0 ]; then wad_end=$(X86_64_DOOM1_WAD_END_LBA); if [ $$wad_end -gt $$end ]; then end=$$wad_end; fi; fi; echo $$end)
+X86_64_PAYLOAD_BASE_END_LBA = $(shell doom_end=$$(( $(DOOM_BIN_LBA) + $(X86_64_DOOM_BIN_SECTORS) )); end=$$doom_end; wad_secs=$(DOOM1_WAD_SECTORS); if [ $$wad_secs -gt 0 ]; then wad_end=$(X86_64_DOOM1_WAD_END_LBA); if [ $$wad_end -gt $$end ]; then end=$$wad_end; fi; fi; echo $$end)
+X86_64_POSIX_SMOKE_LBA = $(X86_64_PAYLOAD_BASE_END_LBA)
+X86_64_INITRD_END_LBA = $(shell echo $$(( $(X86_64_POSIX_SMOKE_LBA) + $(X86_64_POSIX_SMOKE_SECTORS) )))
 X86_64_INITRD_SECTORS = $(shell end=$(X86_64_INITRD_END_LBA); if [ $$end -gt $(DOOM_BIN_LBA) ]; then echo $$(( $$end - $(DOOM_BIN_LBA) )); else echo 0; fi)
 X86_64_INITRD_SIZE = $(shell echo $$(( $(X86_64_INITRD_SECTORS) * 512 )))
 X86_64_DOOM1_WAD_CFLAGS = $(if $(DOOM1_WAD),-DNARCOS_DISK_DOOM1_WAD=1 -DNARCOS_DISK_DOOM1_WAD_LBA=$(X86_64_DOOM1_WAD_LBA) -DNARCOS_DISK_DOOM1_WAD_SIZE=$(DOOM1_WAD_SIZE),)
-X86_64_DISK_PAYLOAD_CFLAGS = -DNARCOS_DISK_DOOM_BIN=1 -DNARCOS_DISK_DOOM_BIN_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_DOOM_BIN_SIZE=$(X86_64_DOOM_BIN_SIZE) -DNARCOS_DISK_INITRD_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_INITRD_SIZE=$(X86_64_INITRD_SIZE) -DNARCOS_DISK_INITRD_ADDR=0x00A00000 $(X86_64_DOOM1_WAD_CFLAGS)
+X86_64_POSIX_SMOKE_CFLAGS = -DNARCOS_DISK_POSIX_SMOKE=1 -DNARCOS_DISK_POSIX_SMOKE_LBA=$(X86_64_POSIX_SMOKE_LBA) -DNARCOS_DISK_POSIX_SMOKE_SIZE=$(X86_64_POSIX_SMOKE_SIZE)
+X86_64_DISK_PAYLOAD_CFLAGS = -DNARCOS_DISK_DOOM_BIN=1 -DNARCOS_DISK_DOOM_BIN_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_DOOM_BIN_SIZE=$(X86_64_DOOM_BIN_SIZE) -DNARCOS_DISK_INITRD_LBA=$(DOOM_BIN_LBA) -DNARCOS_DISK_INITRD_SIZE=$(X86_64_INITRD_SIZE) -DNARCOS_DISK_INITRD_ADDR=0x00A00000 $(X86_64_DOOM1_WAD_CFLAGS) $(X86_64_POSIX_SMOKE_CFLAGS)
 X86_64_KERNEL_OBJECTS = $(X86_64_ASM_OBJECTS) $(X86_64_C_OBJECTS) $(X86_64_USER_EMBED_OBJECTS) $(X86_64_ASSET_BG_OBJECT) $(X86_64_ASSET_LOGO_OBJECT)
 X86_64_KERNEL_ELF = $(X86_64_OBJ_DIR)/kernel64.elf
 X86_64_KERNEL_BIN = $(X86_64_OBJ_DIR)/kernel64.bin
@@ -191,8 +227,8 @@ X86_64_USB_IMAGE = $(X86_64_OBJ_DIR)/narcos-x86_64-usb.img
 # Buna objcopy destek cikar (Fakat biz PE-O yapisindan objcopy cekecegiz)
 # Eger minios.img boyutu sacmalarsa LDFLAGS uzerinden --oformat binary zorlanabilir.
 
-.PHONY: all all-i386 all-x86_64 clean export-i386-artifacts iso iso-i386 iso-x86_64 pre-build run-i386 run-iso-i386 run-iso-usb-i386 run-iso-usb-x86_64 run-iso-x86_64 run-net run-net-i386 run-x86_64 run-x86_64-gui run-x86_64-headless run-x86_64-net usb usb-i386 usb-x86_64 user-programs user-programs-i386 user-programs-x86_64
-.SECONDARY: $(I386_USER_BINARIES) $(X86_64_USER_BINARIES) $(I386_KERNEL_ELF) $(X86_64_KERNEL_ELF)
+.PHONY: all all-i386 all-x86_64 clean export-i386-artifacts iso iso-i386 iso-x86_64 musl musl-clean musl-i386 musl-overlay musl-x86_64 pre-build run-i386 run-iso-i386 run-iso-usb-i386 run-iso-usb-x86_64 run-iso-x86_64 run-net run-net-i386 run-x86_64 run-x86_64-gui run-x86_64-headless run-x86_64-net usb usb-i386 usb-x86_64 user-programs user-programs-i386 user-programs-x86_64
+.SECONDARY: $(I386_USER_BINARIES) $(X86_64_USER_BINARIES) $(I386_USER_PROGRAM_OBJECTS) $(X86_64_USER_PROGRAM_OBJECTS) $(I386_KERNEL_ELF) $(X86_64_KERNEL_ELF)
 
 all: all-i386 export-i386-artifacts
 
@@ -214,12 +250,48 @@ usb-x86_64: pre-build $(X86_64_USB_IMAGE)
 
 user-programs: user-programs-i386
 
-user-programs-i386: pre-build $(I386_USER_BINARIES)
+user-programs-i386: pre-build musl-i386 $(I386_USER_BINARIES)
 
-user-programs-x86_64: pre-build $(X86_64_USER_BINARIES)
+user-programs-x86_64: pre-build musl-x86_64 $(X86_64_USER_BINARIES)
 
 pre-build:
 	@mkdir -p $(OBJ_DIR)
+
+musl-overlay:
+	python3 $(MUSL_OVERLAY_TOOL) $(MUSL_DIR)
+
+musl: musl-i386 musl-x86_64
+
+musl-i386: $(I386_MUSL_LIBC) $(I386_MUSL_CRT1)
+
+musl-x86_64: $(X86_64_MUSL_LIBC) $(X86_64_MUSL_CRT1)
+
+$(I386_MUSL_LIBC): musl-overlay
+	@mkdir -p $(I386_MUSL_BUILD)
+	cd $(I386_MUSL_BUILD) && $(abspath $(MUSL_DIR))/configure --srcdir=$(abspath $(MUSL_DIR)) --prefix=$(MUSL_PREFIX) --target=i386-linux-musl --disable-shared CC="$(CC) -m32" AR=ar RANLIB=ranlib CFLAGS="-fno-pie -fno-pic -fno-stack-protector -fcf-protection=none -fno-builtin -fno-strict-aliasing -mno-red-zone -mpreferred-stack-boundary=2 -O2 -fomit-frame-pointer"
+	$(MAKE) -C $(I386_MUSL_BUILD) ARCH=i386
+	$(MAKE) -C $(I386_MUSL_BUILD) ARCH=i386 DESTDIR=$(abspath $(I386_MUSL_DEST)) install-headers install-libs
+	@echo "[OK] i386 musl: $@"
+
+$(X86_64_MUSL_LIBC): musl-overlay
+	@mkdir -p $(X86_64_MUSL_BUILD)
+	cd $(X86_64_MUSL_BUILD) && $(abspath $(MUSL_DIR))/configure --srcdir=$(abspath $(MUSL_DIR)) --prefix=$(MUSL_PREFIX) --target=x86_64-linux-musl --disable-shared CC="$(CC) -m64" AR=ar RANLIB=ranlib CFLAGS="-fno-pie -fno-pic -fno-stack-protector -fcf-protection=none -fno-builtin -fno-strict-aliasing -mno-red-zone -O2 -fomit-frame-pointer"
+	$(MAKE) -C $(X86_64_MUSL_BUILD) ARCH=x86_64
+	$(MAKE) -C $(X86_64_MUSL_BUILD) ARCH=x86_64 DESTDIR=$(abspath $(X86_64_MUSL_DEST)) install-headers install-libs
+	@echo "[OK] x86_64 musl: $@"
+
+$(I386_MUSL_CRT1): $(MUSL_DIR)/crt/narcos-crt1-i386.s
+	@mkdir -p $(dir $@)
+	$(CC) -m32 -fno-pie -fno-pic -fno-stack-protector -c $< -o $@
+
+$(X86_64_MUSL_CRT1): $(MUSL_DIR)/crt/narcos-crt1-x86_64.s
+	@mkdir -p $(dir $@)
+	$(CC) -m64 -fno-pie -fno-pic -fno-stack-protector -mno-red-zone -c $< -o $@
+
+musl-clean:
+	$(MAKE) -C $(I386_MUSL_BUILD) clean || true
+	$(MAKE) -C $(X86_64_MUSL_BUILD) clean || true
+	rm -rf $(I386_MUSL_BUILD) $(I386_MUSL_DEST) $(X86_64_MUSL_BUILD) $(X86_64_MUSL_DEST)
 
 export-i386-artifacts: $(I386_IMAGE) $(I386_KERNEL_BIN)
 	@mkdir -p $(BOOT_DIR)
@@ -245,7 +317,7 @@ $(I386_OBJ_DIR)/%.o: $(KERN_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(I386_CFLAGS) -c $< -o $@
 
-$(I386_OBJ_DIR)/fs/fs.o: $(I386_DOOM_BINARY) $(DOOM1_WAD)
+$(I386_OBJ_DIR)/fs/fs.o: $(I386_DOOM_BINARY) $(I386_POSIX_SMOKE_BINARY) $(DOOM1_WAD)
 $(I386_OBJ_DIR)/fs/fs.o: I386_CFLAGS += $(I386_DISK_PAYLOAD_CFLAGS)
 
 $(I386_OBJ_DIR)/%.o: $(KERN_DIR)/%.asm
@@ -256,44 +328,44 @@ $(I386_USER_CRT_OBJECT): $(USER_DIR)/crt0.asm
 	@mkdir -p $(dir $@)
 	$(AS) -f elf32 $< -o $@
 
-$(I386_OBJ_DIR)/user/programs/%.o: $(USER_DIR)/programs/%.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS)
+$(I386_OBJ_DIR)/user/programs/%.o: $(USER_DIR)/programs/%.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) $(I386_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(I386_USER_CFLAGS) -c $< -o $@
 
-$(I386_OBJ_DIR)/user/programs/doom.o: $(USER_DIR)/programs/doom.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile
+$(I386_OBJ_DIR)/user/programs/doom.o: $(USER_DIR)/programs/doom.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile $(I386_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(I386_DOOM_CFLAGS) $(I386_USER_CFLAGS) -c $< -o $@
 
-$(I386_OBJ_DIR)/user/programs/doom_libc.o: $(USER_DIR)/programs/doom_libc.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile
+$(I386_OBJ_DIR)/user/programs/doom_libc.o: $(USER_DIR)/programs/doom_libc.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile $(I386_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(I386_DOOM_CFLAGS) $(I386_USER_CFLAGS) -c $< -o $@
 
-$(I386_OBJ_DIR)/doomgeneric/%.o: $(DOOMGENERIC_DIR)/%.c Makefile
+$(I386_OBJ_DIR)/doomgeneric/%.o: $(DOOMGENERIC_DIR)/%.c Makefile $(I386_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(I386_DOOM_CFLAGS) $(I386_USER_CFLAGS) -c $< -o $@
 
-$(I386_OBJ_DIR)/user/lib/%.o: $(KERN_DIR)/apps/%.c $(USER_TLS_HEADERS) $(USER_DIR)/include/user_lib.h
+$(I386_OBJ_DIR)/user/lib/%.o: $(KERN_DIR)/apps/%.c $(USER_TLS_HEADERS) $(USER_DIR)/include/user_lib.h $(I386_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(I386_USER_CFLAGS) -c $< -o $@
 
-$(I386_OBJ_DIR)/user/bin/%: $(I386_USER_CRT_OBJECT) $(I386_OBJ_DIR)/user/programs/%.o $(USER_DIR)/linker.ld
+$(I386_OBJ_DIR)/user/bin/%: $(I386_MUSL_CRT1) $(I386_OBJ_DIR)/user/programs/%.o $(I386_MUSL_LIBC) $(USER_DIR)/linker.ld
 	@mkdir -p $(dir $@)
-	$(LD) $(I386_USER_LDFLAGS) -o $@ $(filter %.o,$^)
+	$(LD) $(I386_USER_LDFLAGS) -o $@ $(I386_MUSL_CRT1) $(filter $(I386_OBJ_DIR)/user/programs/%.o,$^) --start-group $(I386_MUSL_LIBC) $(I386_LIBGCC) --end-group
 	@echo "[OK] i386 user: $@ ($$(wc -c < $@) byte)"
 
-$(I386_OBJ_DIR)/user/bin/doom: $(I386_USER_CRT_OBJECT) $(I386_OBJ_DIR)/user/programs/doom.o $(I386_OBJ_DIR)/user/programs/doom_libc.o $(I386_DOOMGENERIC_OBJECTS) $(USER_DIR)/linker.ld
+$(I386_OBJ_DIR)/user/bin/doom: $(I386_MUSL_CRT1) $(I386_OBJ_DIR)/user/programs/doom.o $(I386_OBJ_DIR)/user/programs/doom_libc.o $(I386_DOOMGENERIC_OBJECTS) $(I386_MUSL_LIBC) $(USER_DIR)/linker.ld
 	@mkdir -p $(dir $@)
-	$(LD) $(I386_USER_LDFLAGS) -o $@ $(filter %.o,$^) $(I386_LIBGCC)
+	$(LD) $(I386_USER_LDFLAGS) -o $@ $(I386_MUSL_CRT1) $(filter-out $(I386_MUSL_CRT1),$(filter %.o,$^)) --start-group $(I386_MUSL_LIBC) $(I386_LIBGCC) --end-group
 	@echo "[OK] i386 user: $@ ($$(wc -c < $@) byte)"
 
-$(I386_USER_TLS_BINARIES): $(I386_OBJ_DIR)/user/bin/%: $(I386_USER_CRT_OBJECT) $(I386_OBJ_DIR)/user/programs/%.o $(I386_USER_TLS_OBJECTS) $(USER_DIR)/linker.ld
+$(I386_USER_TLS_BINARIES): $(I386_OBJ_DIR)/user/bin/%: $(I386_MUSL_CRT1) $(I386_OBJ_DIR)/user/programs/%.o $(I386_USER_TLS_OBJECTS) $(I386_MUSL_LIBC) $(USER_DIR)/linker.ld
 	@mkdir -p $(dir $@)
-	$(LD) $(I386_USER_LDFLAGS) -o $@ $(filter %.o,$^)
+	$(LD) $(I386_USER_LDFLAGS) -o $@ $(I386_MUSL_CRT1) $(filter-out $(I386_MUSL_CRT1),$(filter %.o,$^)) --start-group $(I386_MUSL_LIBC) $(I386_LIBGCC) --end-group
 	@echo "[OK] i386 user: $@ ($$(wc -c < $@) byte)"
 
-$(I386_OBJ_DIR)/user/bin/desktop: $(I386_USER_CRT_OBJECT) $(I386_OBJ_DIR)/user/programs/desktop.o $(I386_DESKTOP_ASSET_BG_OBJECT) $(USER_DIR)/linker.ld
+$(I386_OBJ_DIR)/user/bin/desktop: $(I386_MUSL_CRT1) $(I386_OBJ_DIR)/user/programs/desktop.o $(I386_DESKTOP_ASSET_BG_OBJECT) $(I386_MUSL_LIBC) $(USER_DIR)/linker.ld
 	@mkdir -p $(dir $@)
-	$(LD) $(I386_USER_LDFLAGS) -o $@ $(filter %.o,$^)
+	$(LD) $(I386_USER_LDFLAGS) -o $@ $(I386_MUSL_CRT1) $(filter-out $(I386_MUSL_CRT1),$(filter %.o,$^)) --start-group $(I386_MUSL_LIBC) $(I386_LIBGCC) --end-group
 	@echo "[OK] i386 user: $@ ($$(wc -c < $@) byte)"
 
 $(I386_OBJ_DIR)/user/embed/%.o: $(I386_OBJ_DIR)/user/bin/%
@@ -339,7 +411,7 @@ $(I386_BOOT_MANIFEST_BIN): $(I386_KERNEL_ELF) $(I386_DOOM_BINARY) $(DOOM1_WAD) $
 	python3 $(BOOT_MANIFEST_TOOL) $< $@ $(KERNEL_START_LBA) --initrd-lba $(DOOM_BIN_LBA) --initrd-sectors $(I386_INITRD_SECTORS) --initrd-size $(I386_INITRD_SIZE)
 	@echo "[OK] i386 boot manifest: $@"
 
-$(I386_IMAGE): $(I386_BOOT_BIN) $(I386_STAGE2_BIN) $(I386_BOOT_MANIFEST_BIN) $(I386_KERNEL_ELF) $(I386_DOOM_BINARY) $(FS_SEED_TOOL)
+$(I386_IMAGE): $(I386_BOOT_BIN) $(I386_STAGE2_BIN) $(I386_BOOT_MANIFEST_BIN) $(I386_KERNEL_ELF) $(I386_USER_BINARIES) $(FS_SEED_TOOL)
 	@mkdir -p $(dir $@)
 	$(eval KERNEL_SECS := $(shell echo $$(( ($$(wc -c < $(I386_KERNEL_ELF)) + 511) / 512 ))))
 	@echo "[INFO] i386 kernel sector size: $(KERNEL_SECS)"
@@ -352,7 +424,8 @@ $(I386_IMAGE): $(I386_BOOT_BIN) $(I386_STAGE2_BIN) $(I386_BOOT_MANIFEST_BIN) $(I
 	dd if=$(I386_DOOM_BINARY) of=$@ bs=512 seek=$(DOOM_BIN_LBA) conv=notrunc 2>/dev/null
 	$(if $(DOOM1_WAD),@test $(DOOM1_WAD_SIZE) -le $(DOOM1_WAD_MAX_SIZE) || (echo "[ERR] $(DOOM1_WAD) too large for payload slot: $(DOOM1_WAD_SIZE) > $(DOOM1_WAD_MAX_SIZE)" && exit 1),)
 	$(if $(DOOM1_WAD),dd if=$(DOOM1_WAD) of=$@ bs=512 seek=$(I386_DOOM1_WAD_LBA) conv=notrunc 2>/dev/null,)
-	python3 $(FS_SEED_TOOL) $@
+	dd if=$(I386_POSIX_SMOKE_BINARY) of=$@ bs=512 seek=$(I386_POSIX_SMOKE_LBA) conv=notrunc 2>/dev/null
+	python3 $(FS_SEED_TOOL) $@ --bin-dir $(I386_OBJ_DIR)/user/bin --programs "$(FS_SEED_PROGRAMS)"
 	@echo "[OK] i386 image: $@"
 
 $(I386_ISO): $(I386_IMAGE)
@@ -373,7 +446,7 @@ $(X86_64_OBJ_DIR)/%.o: $(KERN_DIR)/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(X86_64_CFLAGS) -c $< -o $@
 
-$(X86_64_OBJ_DIR)/fs/fs.o: $(X86_64_DOOM_BINARY) $(DOOM1_WAD)
+$(X86_64_OBJ_DIR)/fs/fs.o: $(X86_64_DOOM_BINARY) $(X86_64_POSIX_SMOKE_BINARY) $(DOOM1_WAD)
 $(X86_64_OBJ_DIR)/fs/fs.o: X86_64_CFLAGS += $(X86_64_DISK_PAYLOAD_CFLAGS)
 
 $(X86_64_OBJ_DIR)/%.o: $(KERN_DIR)/%.asm
@@ -384,44 +457,44 @@ $(X86_64_USER_CRT_OBJECT): $(USER_DIR)/crt0_x86_64.asm
 	@mkdir -p $(dir $@)
 	$(AS) -f elf64 $< -o $@
 
-$(X86_64_OBJ_DIR)/user/programs/%.o: $(USER_DIR)/programs/%.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS)
+$(X86_64_OBJ_DIR)/user/programs/%.o: $(USER_DIR)/programs/%.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) $(X86_64_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(X86_64_USER_CFLAGS) -c $< -o $@
 
-$(X86_64_OBJ_DIR)/user/programs/doom.o: $(USER_DIR)/programs/doom.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile
+$(X86_64_OBJ_DIR)/user/programs/doom.o: $(USER_DIR)/programs/doom.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile $(X86_64_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(X86_64_DOOM_CFLAGS) $(X86_64_USER_CFLAGS) -c $< -o $@
 
-$(X86_64_OBJ_DIR)/user/programs/doom_libc.o: $(USER_DIR)/programs/doom_libc.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile
+$(X86_64_OBJ_DIR)/user/programs/doom_libc.o: $(USER_DIR)/programs/doom_libc.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile $(X86_64_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(X86_64_DOOM_CFLAGS) $(X86_64_USER_CFLAGS) -c $< -o $@
 
-$(X86_64_OBJ_DIR)/doomgeneric/%.o: $(DOOMGENERIC_DIR)/%.c Makefile
+$(X86_64_OBJ_DIR)/doomgeneric/%.o: $(DOOMGENERIC_DIR)/%.c Makefile $(X86_64_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(X86_64_DOOM_CFLAGS) $(X86_64_USER_CFLAGS) -c $< -o $@
 
-$(X86_64_OBJ_DIR)/user/lib/%.o: $(KERN_DIR)/apps/%.c $(USER_TLS_HEADERS) $(USER_DIR)/include/user_lib.h
+$(X86_64_OBJ_DIR)/user/lib/%.o: $(KERN_DIR)/apps/%.c $(USER_TLS_HEADERS) $(USER_DIR)/include/user_lib.h $(X86_64_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(X86_64_USER_CFLAGS) -c $< -o $@
 
-$(X86_64_OBJ_DIR)/user/bin/%: $(X86_64_USER_CRT_OBJECT) $(X86_64_OBJ_DIR)/user/programs/%.o $(USER_DIR)/linker_x86_64.ld
+$(X86_64_OBJ_DIR)/user/bin/%: $(X86_64_MUSL_CRT1) $(X86_64_OBJ_DIR)/user/programs/%.o $(X86_64_MUSL_LIBC) $(USER_DIR)/linker_x86_64.ld
 	@mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(filter %.o,$^)
+	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(X86_64_MUSL_CRT1) $(filter $(X86_64_OBJ_DIR)/user/programs/%.o,$^) --start-group $(X86_64_MUSL_LIBC) $(X86_64_LIBGCC) --end-group
 	@echo "[OK] x86_64 user: $@ ($$(wc -c < $@) byte)"
 
-$(X86_64_OBJ_DIR)/user/bin/doom: $(X86_64_USER_CRT_OBJECT) $(X86_64_OBJ_DIR)/user/programs/doom.o $(X86_64_OBJ_DIR)/user/programs/doom_libc.o $(X86_64_DOOMGENERIC_OBJECTS) $(USER_DIR)/linker_x86_64.ld
+$(X86_64_OBJ_DIR)/user/bin/doom: $(X86_64_MUSL_CRT1) $(X86_64_OBJ_DIR)/user/programs/doom.o $(X86_64_OBJ_DIR)/user/programs/doom_libc.o $(X86_64_DOOMGENERIC_OBJECTS) $(X86_64_MUSL_LIBC) $(USER_DIR)/linker_x86_64.ld
 	@mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(filter %.o,$^) $(X86_64_LIBGCC)
+	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(X86_64_MUSL_CRT1) $(filter-out $(X86_64_MUSL_CRT1),$(filter %.o,$^)) --start-group $(X86_64_MUSL_LIBC) $(X86_64_LIBGCC) --end-group
 	@echo "[OK] x86_64 user: $@ ($$(wc -c < $@) byte)"
 
-$(X86_64_USER_TLS_BINARIES): $(X86_64_OBJ_DIR)/user/bin/%: $(X86_64_USER_CRT_OBJECT) $(X86_64_OBJ_DIR)/user/programs/%.o $(X86_64_USER_TLS_OBJECTS) $(USER_DIR)/linker_x86_64.ld
+$(X86_64_USER_TLS_BINARIES): $(X86_64_OBJ_DIR)/user/bin/%: $(X86_64_MUSL_CRT1) $(X86_64_OBJ_DIR)/user/programs/%.o $(X86_64_USER_TLS_OBJECTS) $(X86_64_MUSL_LIBC) $(USER_DIR)/linker_x86_64.ld
 	@mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(filter %.o,$^)
+	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(X86_64_MUSL_CRT1) $(filter-out $(X86_64_MUSL_CRT1),$(filter %.o,$^)) --start-group $(X86_64_MUSL_LIBC) $(X86_64_LIBGCC) --end-group
 	@echo "[OK] x86_64 user: $@ ($$(wc -c < $@) byte)"
 
-$(X86_64_OBJ_DIR)/user/bin/desktop: $(X86_64_USER_CRT_OBJECT) $(X86_64_OBJ_DIR)/user/programs/desktop.o $(X86_64_DESKTOP_ASSET_BG_OBJECT) $(USER_DIR)/linker_x86_64.ld
+$(X86_64_OBJ_DIR)/user/bin/desktop: $(X86_64_MUSL_CRT1) $(X86_64_OBJ_DIR)/user/programs/desktop.o $(X86_64_DESKTOP_ASSET_BG_OBJECT) $(X86_64_MUSL_LIBC) $(USER_DIR)/linker_x86_64.ld
 	@mkdir -p $(dir $@)
-	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(filter %.o,$^)
+	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(X86_64_MUSL_CRT1) $(filter-out $(X86_64_MUSL_CRT1),$(filter %.o,$^)) --start-group $(X86_64_MUSL_LIBC) $(X86_64_LIBGCC) --end-group
 	@echo "[OK] x86_64 user: $@ ($$(wc -c < $@) byte)"
 
 $(X86_64_OBJ_DIR)/user/embed/%.o: $(X86_64_OBJ_DIR)/user/bin/%
@@ -478,7 +551,7 @@ $(X86_64_BOOT_MANIFEST_BIN): $(X86_64_KERNEL_ELF) $(X86_64_DOOM_BINARY) $(DOOM1_
 	python3 $(BOOT_MANIFEST_TOOL) $< $@ $(KERNEL_START_LBA) --initrd-lba $(DOOM_BIN_LBA) --initrd-sectors $(X86_64_INITRD_SECTORS) --initrd-size $(X86_64_INITRD_SIZE)
 	@echo "[OK] x86_64 boot manifest: $@"
 
-$(X86_64_IMAGE): $(X86_64_BOOT_BIN) $(X86_64_STAGE2_BIN) $(X86_64_BOOT_MANIFEST_BIN) $(X86_64_KERNEL_ELF) $(X86_64_DOOM_BINARY) $(FS_SEED_TOOL)
+$(X86_64_IMAGE): $(X86_64_BOOT_BIN) $(X86_64_STAGE2_BIN) $(X86_64_BOOT_MANIFEST_BIN) $(X86_64_KERNEL_ELF) $(X86_64_USER_BINARIES) $(FS_SEED_TOOL)
 	@mkdir -p $(dir $@)
 	dd if=/dev/zero of=$@ bs=512 count=$(DISK_IMAGE_SECTORS) 2>/dev/null
 	dd if=$(X86_64_BOOT_BIN) of=$@ bs=512 seek=0 conv=notrunc 2>/dev/null
@@ -489,7 +562,8 @@ $(X86_64_IMAGE): $(X86_64_BOOT_BIN) $(X86_64_STAGE2_BIN) $(X86_64_BOOT_MANIFEST_
 	dd if=$(X86_64_DOOM_BINARY) of=$@ bs=512 seek=$(DOOM_BIN_LBA) conv=notrunc 2>/dev/null
 	$(if $(DOOM1_WAD),@test $(DOOM1_WAD_SIZE) -le $(DOOM1_WAD_MAX_SIZE) || (echo "[ERR] $(DOOM1_WAD) too large for payload slot: $(DOOM1_WAD_SIZE) > $(DOOM1_WAD_MAX_SIZE)" && exit 1),)
 	$(if $(DOOM1_WAD),dd if=$(DOOM1_WAD) of=$@ bs=512 seek=$(X86_64_DOOM1_WAD_LBA) conv=notrunc 2>/dev/null,)
-	python3 $(FS_SEED_TOOL) $@
+	dd if=$(X86_64_POSIX_SMOKE_BINARY) of=$@ bs=512 seek=$(X86_64_POSIX_SMOKE_LBA) conv=notrunc 2>/dev/null
+	python3 $(FS_SEED_TOOL) $@ --bin-dir $(X86_64_OBJ_DIR)/user/bin --programs "$(FS_SEED_PROGRAMS)"
 	@echo "[OK] x86_64 image: $@"
 
 $(X86_64_ISO): $(X86_64_IMAGE)

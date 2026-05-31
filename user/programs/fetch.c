@@ -1,9 +1,9 @@
-#include "user_lib.h"
+#include <stdio.h>
+#include <unistd.h>
 
 int main(int argc, char** argv) {
-    int status = user_exec("/bin/tls_tools", (const char* const*)argv, (uint32_t)argc);
-
-    (void)status;
-    userlib_print_error("fetch: failed to exec /bin/tls_tools");
+    (void)argc;
+    (void)execve("/bin/tls_tools", argv, 0);
+    fputs("fetch: failed to exec /bin/tls_tools\n", stderr);
     return 1;
 }

@@ -1,5 +1,6 @@
 #include "process_api.h"
 #include "user_lib.h"
+#include <stdio.h>
 
 #define PS_MAX_ENTRIES 16
 
@@ -21,25 +22,25 @@ int main(void) {
     int count = user_process_snapshot(entries, PS_MAX_ENTRIES);
 
     if (count < 0) {
-        userlib_print_error("ps: snapshot failed");
+        fputs("ps: snapshot failed\n", stderr);
         return 1;
     }
 
-    if (userlib_println("PID\tPPID\tSTATE\tKIND\tNAME\tIMAGE") != 0) return 1;
+    if (puts("PID\tPPID\tSTATE\tKIND\tNAME\tIMAGE") < 0) return 1;
     for (int i = 0; i < count; i++) {
         const char* image = entries[i].image_path[0] != '\0' ? entries[i].image_path : "-";
 
         if (userlib_print_i32_fd(USER_STDOUT, entries[i].pid) != 0) return 1;
-        if (userlib_write_all(USER_STDOUT, "\t", 1U) != 0) return 1;
+        if (fputc('\t', stdout) == EOF) return 1;
         if (userlib_print_i32_fd(USER_STDOUT, entries[i].parent_pid) != 0) return 1;
-        if (userlib_write_all(USER_STDOUT, "\t", 1U) != 0) return 1;
-        if (userlib_print(ps_state_name(entries[i].state)) != 0) return 1;
-        if (userlib_write_all(USER_STDOUT, "\t", 1U) != 0) return 1;
-        if (userlib_print(ps_kind_name(entries[i].kind)) != 0) return 1;
-        if (userlib_write_all(USER_STDOUT, "\t", 1U) != 0) return 1;
-        if (userlib_print(entries[i].name) != 0) return 1;
-        if (userlib_write_all(USER_STDOUT, "\t", 1U) != 0) return 1;
-        if (userlib_println(image) != 0) return 1;
+        if (fputc('\t', stdout) == EOF) return 1;
+        if (fputs(ps_state_name(entries[i].state), stdout) == EOF) return 1;
+        if (fputc('\t', stdout) == EOF) return 1;
+        if (fputs(ps_kind_name(entries[i].kind), stdout) == EOF) return 1;
+        if (fputc('\t', stdout) == EOF) return 1;
+        if (fputs(entries[i].name, stdout) == EOF) return 1;
+        if (fputc('\t', stdout) == EOF) return 1;
+        if (puts(image) < 0) return 1;
     }
 
     return 0;

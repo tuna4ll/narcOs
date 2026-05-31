@@ -34,14 +34,56 @@ extern uint8_t __user_region_end[];
 #define SYSCALL_USER_HEAP_ALIGN 16U
 #define SYSCALL_USER_PAGE_SIZE 4096U
 #define SYSCALL_WRITE_FAST_BUF 1024U
+#define SYSCALL_DIRENT_BUF_MAX 4096U
+#define SYSCALL_MMAP_SEARCH_GUARD_PAGES 1U
+#define SYSCALL_ERR_EINVAL 22
+#define SYSCALL_ERR_ENOMEM 12
 
 static void syscall_set_result(arch_trap_frame_t* frame, intptr_t value) {
     arch_frame_set_return_value(frame, (uintptr_t)value);
 }
 
+static int syscall_resolve_at_path(int dirfd, const char* user_path, char* out_path, size_t out_size) {
+    int node_idx;
+    size_t base_len;
+    size_t path_len;
+
+    if (!user_path || !out_path || out_size == 0U) return -1;
+    if (user_path[0] == '/' || dirfd == NARCOS_AT_FDCWD) {
+        strncpy(out_path, user_path, out_size - 1U);
+        out_path[out_size - 1U] = '\0';
+        return 0;
+    }
+    if (fd_get_node_idx(process_current(), dirfd, &node_idx) != 0) return -1;
+    fs_get_path_by_index(node_idx, out_path, out_size);
+    if (out_path[0] == '\0') return -1;
+
+    base_len = strlen(out_path);
+    path_len = strlen(user_path);
+    if (base_len + 1U + path_len + 1U > out_size) return -1;
+    if (base_len > 1U) out_path[base_len++] = '/';
+    strcpy(out_path + base_len, user_path);
+    return 0;
+}
+
+static const char* syscall_leaf_name(const char* path) {
+    const char* leaf = path;
+
+    if (!path) return "";
+    for (size_t i = 0; path[i] != '\0'; i++) {
+        if (path[i] == '/') leaf = path + i + 1U;
+    }
+    return leaf;
+}
+
 static uintptr_t syscall_align_up_uintptr(uintptr_t value, uintptr_t align) {
     if (align == 0U) return value;
     return (value + align - 1U) & ~(align - 1U);
+}
+
+static uintptr_t syscall_align_down_uintptr(uintptr_t value, uintptr_t align) {
+    if (align == 0U) return value;
+    return value & ~(align - 1U);
 }
 
 static process_t* syscall_user_owner_process(void) {
@@ -165,6 +207,201 @@ static void syscall_user_free(uintptr_t ptr) {
         syscall_user_recompute_program_break(owner);
         return;
     }
+}
+
+static uintptr_t syscall_user_brk(uintptr_t requested_break) {
+    process_t* owner = syscall_user_owner_process();
+    uintptr_t current_break;
+    uintptr_t map_base;
+    uintptr_t map_end;
+    size_t map_size;
+    size_t page_count;
+    void* phys_base;
+
+    if (!owner || owner->kind != PROCESS_KIND_USER || !owner->user_space.valid) return 0U;
+    current_break = (uintptr_t)owner->user_space.image.program_break;
+    if (requested_break == 0U) return current_break;
+    if (requested_break < (uintptr_t)owner->user_space.image.image_limit ||
+        requested_break > (uintptr_t)EXEC_USER_STACK_BASE) {
+        return current_break;
+    }
+    if (requested_break <= current_break) {
+        owner->user_space.image.program_break = (uint32_t)requested_break;
+        return requested_break;
+    }
+
+    map_base = syscall_align_up_uintptr(current_break, SYSCALL_USER_PAGE_SIZE);
+    map_end = syscall_align_up_uintptr(requested_break, SYSCALL_USER_PAGE_SIZE);
+    if (map_end <= map_base) {
+        owner->user_space.image.program_break = (uint32_t)requested_break;
+        return requested_break;
+    }
+    if (owner->user_space.mapping_count >= EXEC_MAX_IMAGE_MAPPINGS) return current_break;
+
+    map_size = (size_t)(map_end - map_base);
+    page_count = map_size / SYSCALL_USER_PAGE_SIZE;
+    phys_base = alloc_physical_pages(page_count);
+    if (!phys_base) return current_break;
+    if (paging_map_user_region(map_base, (uintptr_t)phys_base, map_size, PAGING_FLAG_WRITE) != 0) {
+        free_physical_pages(phys_base, page_count);
+        return current_break;
+    }
+
+    memset((void*)map_base, 0, map_size);
+    owner->user_space.mappings[owner->user_space.mapping_count].virt_base = (uint32_t)map_base;
+    owner->user_space.mappings[owner->user_space.mapping_count].phys_base = (uint32_t)(uintptr_t)phys_base;
+    owner->user_space.mappings[owner->user_space.mapping_count].page_count = (uint32_t)page_count;
+    owner->user_space.mappings[owner->user_space.mapping_count].flags = PAGING_FLAG_WRITE | EXEC_MAPPING_FLAG_HEAP;
+    owner->user_space.mapping_count++;
+    owner->user_space.image.program_break = (uint32_t)requested_break;
+    return requested_break;
+}
+
+static int syscall_user_mapping_overlaps(const exec_address_space_t* space,
+                                         uintptr_t base, uintptr_t size) {
+    uintptr_t end = base + size;
+
+    if (!space || size == 0U || end <= base) return 1;
+    for (uint32_t i = 0; i < space->mapping_count; i++) {
+        const exec_mapping_t* mapping = &space->mappings[i];
+        uintptr_t other_base = (uintptr_t)mapping->virt_base;
+        uintptr_t other_end = other_base + (uintptr_t)mapping->page_count * SYSCALL_USER_PAGE_SIZE;
+
+        if (base < other_end && end > other_base) return 1;
+    }
+    return 0;
+}
+
+static uintptr_t syscall_user_find_mmap_base(process_t* owner, size_t map_size) {
+    uintptr_t cursor;
+    uintptr_t min_addr;
+
+    if (!owner || map_size == 0U || map_size > USER_DATA_WINDOW_SIZE) return 0U;
+    min_addr = syscall_align_up_uintptr((uintptr_t)owner->user_space.image.program_break,
+                                        SYSCALL_USER_PAGE_SIZE);
+    cursor = syscall_align_down_uintptr((uintptr_t)EXEC_USER_STACK_BASE -
+                                        SYSCALL_MMAP_SEARCH_GUARD_PAGES * SYSCALL_USER_PAGE_SIZE,
+                                        SYSCALL_USER_PAGE_SIZE);
+    while (cursor >= min_addr + map_size) {
+        uintptr_t candidate = cursor - map_size;
+
+        candidate = syscall_align_down_uintptr(candidate, SYSCALL_USER_PAGE_SIZE);
+        if (candidate < min_addr) break;
+        if (!syscall_user_mapping_overlaps(&owner->user_space, candidate, map_size)) return candidate;
+        if (candidate < SYSCALL_USER_PAGE_SIZE) break;
+        cursor = candidate - SYSCALL_USER_PAGE_SIZE;
+    }
+    return 0U;
+}
+
+static intptr_t syscall_user_mmap(uintptr_t requested_addr, size_t len,
+                                  uint32_t prot, uint32_t flags, int fd, uint64_t offset) {
+    process_t* owner = syscall_user_owner_process();
+    uintptr_t map_base;
+    uintptr_t map_size;
+    size_t page_count;
+    void* phys_base;
+
+    (void)prot;
+    if (!owner || owner->kind != PROCESS_KIND_USER || !owner->user_space.valid) return -SYSCALL_ERR_EINVAL;
+    if (len == 0U) return -SYSCALL_ERR_EINVAL;
+    if ((flags & NARCOS_MAP_ANONYMOUS) == 0U || (flags & NARCOS_MAP_PRIVATE) == 0U) return -SYSCALL_ERR_EINVAL;
+    if (fd != -1 || offset != 0ULL) return -SYSCALL_ERR_EINVAL;
+    if ((flags & NARCOS_MAP_FIXED) != 0U) return -SYSCALL_ERR_EINVAL;
+    if (owner->user_space.mapping_count >= EXEC_MAX_IMAGE_MAPPINGS) return -SYSCALL_ERR_ENOMEM;
+
+    map_size = syscall_align_up_uintptr((uintptr_t)len, SYSCALL_USER_PAGE_SIZE);
+    if (map_size == 0U || map_size > USER_DATA_WINDOW_SIZE) return -SYSCALL_ERR_ENOMEM;
+    if (requested_addr != 0U) {
+        map_base = syscall_align_down_uintptr(requested_addr, SYSCALL_USER_PAGE_SIZE);
+        if (map_base != requested_addr ||
+            !user_range_in_window(map_base, map_size, USER_DATA_WINDOW_BASE, USER_DATA_WINDOW_SIZE) ||
+            map_base + map_size > (uintptr_t)EXEC_USER_STACK_BASE ||
+            syscall_user_mapping_overlaps(&owner->user_space, map_base, map_size)) {
+            return -SYSCALL_ERR_EINVAL;
+        }
+    } else {
+        map_base = syscall_user_find_mmap_base(owner, (size_t)map_size);
+        if (map_base == 0U) return -SYSCALL_ERR_ENOMEM;
+    }
+
+    page_count = (size_t)map_size / SYSCALL_USER_PAGE_SIZE;
+    phys_base = alloc_physical_pages(page_count);
+    if (!phys_base) return -SYSCALL_ERR_ENOMEM;
+    if (paging_map_user_region(map_base, (uintptr_t)phys_base, (size_t)map_size, PAGING_FLAG_WRITE) != 0) {
+        free_physical_pages(phys_base, page_count);
+        return -SYSCALL_ERR_ENOMEM;
+    }
+    memset((void*)map_base, 0, (size_t)map_size);
+    owner->user_space.mappings[owner->user_space.mapping_count].virt_base = (uint32_t)map_base;
+    owner->user_space.mappings[owner->user_space.mapping_count].phys_base = (uint32_t)(uintptr_t)phys_base;
+    owner->user_space.mappings[owner->user_space.mapping_count].page_count = (uint32_t)page_count;
+    owner->user_space.mappings[owner->user_space.mapping_count].flags = PAGING_FLAG_WRITE | EXEC_MAPPING_FLAG_MMAP;
+    owner->user_space.mapping_count++;
+    return (intptr_t)map_base;
+}
+
+static int syscall_user_munmap(uintptr_t addr, size_t len) {
+    process_t* owner = syscall_user_owner_process();
+    uintptr_t map_size;
+
+    if (!owner || owner->kind != PROCESS_KIND_USER || !owner->user_space.valid) return -SYSCALL_ERR_EINVAL;
+    if (addr == 0U || len == 0U || (addr & (SYSCALL_USER_PAGE_SIZE - 1U)) != 0U) return -SYSCALL_ERR_EINVAL;
+    map_size = syscall_align_up_uintptr((uintptr_t)len, SYSCALL_USER_PAGE_SIZE);
+    for (uint32_t i = 0; i < owner->user_space.mapping_count; i++) {
+        exec_mapping_t* mapping = &owner->user_space.mappings[i];
+        uintptr_t mapping_size = (uintptr_t)mapping->page_count * SYSCALL_USER_PAGE_SIZE;
+
+        if ((mapping->flags & EXEC_MAPPING_FLAG_MMAP) == 0U ||
+            mapping->virt_base != (uint32_t)addr ||
+            mapping_size != map_size) {
+            continue;
+        }
+        paging_unmap_user_region(mapping->virt_base, mapping_size);
+        free_physical_pages((void*)(uintptr_t)mapping->phys_base, mapping->page_count);
+        for (uint32_t j = i + 1U; j < owner->user_space.mapping_count; j++) {
+            owner->user_space.mappings[j - 1U] = owner->user_space.mappings[j];
+        }
+        owner->user_space.mapping_count--;
+        return 0;
+    }
+    return -SYSCALL_ERR_EINVAL;
+}
+
+static int syscall_user_mprotect(uintptr_t addr, size_t len, uint32_t prot) {
+    process_t* owner = syscall_user_owner_process();
+    uintptr_t map_size;
+
+    if (!owner || owner->kind != PROCESS_KIND_USER || !owner->user_space.valid) return -SYSCALL_ERR_EINVAL;
+    if (addr == 0U || len == 0U || (addr & (SYSCALL_USER_PAGE_SIZE - 1U)) != 0U) return -SYSCALL_ERR_EINVAL;
+    if ((prot & ~(NARCOS_PROT_READ | NARCOS_PROT_WRITE | NARCOS_PROT_EXEC)) != 0U) return -SYSCALL_ERR_EINVAL;
+
+    map_size = syscall_align_up_uintptr((uintptr_t)len, SYSCALL_USER_PAGE_SIZE);
+    for (uint32_t i = 0; i < owner->user_space.mapping_count; i++) {
+        exec_mapping_t* mapping = &owner->user_space.mappings[i];
+        uintptr_t mapping_base = (uintptr_t)mapping->virt_base;
+        uintptr_t mapping_size = (uintptr_t)mapping->page_count * SYSCALL_USER_PAGE_SIZE;
+
+        if (addr >= mapping_base && addr + map_size <= mapping_base + mapping_size) return 0;
+    }
+    return -SYSCALL_ERR_EINVAL;
+}
+
+static void syscall_fill_stat_from_node(int node_idx, const disk_fs_node_t* node, narcos_stat_t* out_stat) {
+    uint32_t permissions;
+
+    if (!node || !out_stat) return;
+    memset(out_stat, 0, sizeof(*out_stat));
+    permissions = NARCOS_S_IRUSR | NARCOS_S_IRGRP | NARCOS_S_IROTH;
+    if (node->flags == FS_NODE_FILE) permissions |= NARCOS_S_IWUSR | NARCOS_S_IWGRP | NARCOS_S_IWOTH;
+    if (node->flags == FS_NODE_DIR) permissions |= NARCOS_S_IXUSR | NARCOS_S_IXGRP | NARCOS_S_IXOTH;
+    out_stat->size = sizeof(*out_stat);
+    out_stat->mode = (node->flags == FS_NODE_DIR ? NARCOS_S_IFDIR : NARCOS_S_IFREG) | permissions;
+    out_stat->nlink = 1U;
+    out_stat->ino = (uint64_t)(uint32_t)(node_idx + 2);
+    out_stat->file_size = node->flags == FS_NODE_FILE ? node->size : 0U;
+    out_stat->blksize = 512U;
+    out_stat->blocks = (out_stat->file_size + 511ULL) / 512ULL;
 }
 
 static uint8_t current_user_argv_slot_size(void) {
@@ -1351,6 +1588,321 @@ void syscall_PIPE(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
     }
 }
 
+void syscall_OPENAT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+    uintptr_t arg3 = (uintptr_t)regs->arg3;
+    char path[SYSCALL_USER_PATH_MAX];
+    uint32_t access;
+    uint32_t open_flags = 0U;
+    uint32_t accmode;
+    char resolved_path[SYSCALL_USER_PATH_MAX];
+
+    if (copy_string_from_user(path, (const char*)arg1, sizeof(path)) != 0) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    if (syscall_resolve_at_path((int)arg0, path, resolved_path, sizeof(resolved_path)) != 0) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    (void)arg3;
+
+    accmode = (uint32_t)arg2 & 0x3U;
+    if (accmode == NARCOS_O_WRONLY) access = FD_ACCESS_WRITE;
+    else if (accmode == NARCOS_O_RDWR) access = FD_ACCESS_READ | FD_ACCESS_WRITE;
+    else access = FD_ACCESS_READ;
+
+    if (((uint32_t)arg2 & NARCOS_O_CREAT) != 0U) open_flags |= FD_OPEN_CREATE;
+    if (((uint32_t)arg2 & NARCOS_O_TRUNC) != 0U) open_flags |= FD_OPEN_TRUNC;
+    if (((uint32_t)arg2 & NARCOS_O_APPEND) != 0U) open_flags |= FD_OPEN_APPEND;
+    if (((uint32_t)arg2 & NARCOS_O_DIRECTORY) != 0U) open_flags |= FD_OPEN_DIRECTORY;
+    if (((uint32_t)arg2 & NARCOS_O_NONBLOCK) != 0U) open_flags |= FD_OPEN_NONBLOCK;
+    if (((uint32_t)arg2 & NARCOS_O_CLOEXEC) != 0U) open_flags |= FD_OPEN_CLOEXEC;
+    syscall_set_result(frame, fd_open_file(process_current(), resolved_path, access, open_flags, -1));
+}
+
+void syscall_LSEEK(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+    uint32_t new_offset = 0U;
+
+    syscall_set_result(frame, fd_lseek(process_current(), (int)arg0, (int32_t)arg1, (int)arg2, &new_offset) == 0
+                                  ? (intptr_t)new_offset
+                                  : -1);
+}
+
+void syscall_FSTAT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    narcos_stat_t stat;
+    int status;
+
+    status = fd_stat(process_current(), (int)arg0, &stat);
+    if (status == 0 && copy_to_user((void*)arg1, &stat, sizeof(stat)) != 0) status = -1;
+    syscall_set_result(frame, status);
+}
+
+void syscall_STAT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    char path[SYSCALL_USER_PATH_MAX];
+    disk_fs_node_t node;
+    narcos_stat_t stat;
+    int node_idx;
+    int status = -1;
+
+    if (copy_string_from_user(path, (const char*)arg0, sizeof(path)) == 0) {
+        node_idx = fs_find_node(path);
+        if (node_idx >= 0 && fs_get_node_info(node_idx, &node) == 0) {
+            syscall_fill_stat_from_node(node_idx, &node, &stat);
+            status = copy_to_user((void*)arg1, &stat, sizeof(stat)) == 0 ? 0 : -1;
+        }
+    }
+    syscall_set_result(frame, status);
+}
+
+void syscall_BRK(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+
+    syscall_set_result(frame, (intptr_t)syscall_user_brk(arg0));
+}
+
+void syscall_CLOCK_GETTIME(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    narcos_timespec_t ts;
+    uint32_t ticks;
+
+    (void)arg0;
+    ticks = timer_ticks;
+    ts.tv_sec = ticks / 100U;
+    ts.tv_nsec = (int64_t)(ticks % 100U) * 10000000LL;
+    syscall_set_result(frame, copy_to_user((void*)arg1, &ts, sizeof(ts)) == 0 ? 0 : -1);
+}
+
+void syscall_NANOSLEEP(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    narcos_timespec_t req;
+    uint32_t seconds;
+    uint32_t nanoseconds;
+    uint32_t ticks;
+
+    if (copy_from_user(&req, (const void*)arg0, sizeof(req)) != 0 ||
+        req.tv_sec < 0 || req.tv_sec > 0x028F5C28LL ||
+        req.tv_nsec < 0 || req.tv_nsec >= 1000000000LL) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    seconds = (uint32_t)req.tv_sec;
+    nanoseconds = (uint32_t)req.tv_nsec;
+    ticks = seconds * 100U + (nanoseconds + 9999999U) / 10000000U;
+    if (ticks == 0U) {
+        syscall_set_result(frame, 0);
+    } else if (process_request_sleep_current(ticks) != 0) {
+        syscall_set_result(frame, -1);
+    } else {
+        user_kernel_return_mode = USER_KERNEL_RETURN_KERNEL;
+        syscall_set_result(frame, 0);
+    }
+}
+
+void syscall_GETDENTS64(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+    void* buffer;
+    int status;
+
+    if (arg2 == 0U) {
+        syscall_set_result(frame, 0);
+        return;
+    }
+    if (arg2 > SYSCALL_DIRENT_BUF_MAX) arg2 = SYSCALL_DIRENT_BUF_MAX;
+    buffer = malloc((size_t)arg2);
+    if (!buffer) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    status = fd_getdents64(process_current(), (int)arg0, buffer, (uint32_t)arg2);
+    if (status > 0 && copy_to_user((void*)arg1, buffer, (uint32_t)status) != 0) status = -1;
+    free(buffer);
+    syscall_set_result(frame, status);
+}
+
+void syscall_UNLINKAT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+    char path[SYSCALL_USER_PATH_MAX];
+    char resolved_path[SYSCALL_USER_PATH_MAX];
+    disk_fs_node_t node;
+    int node_idx;
+
+    if (((uint32_t)arg2 & ~NARCOS_AT_REMOVEDIR) != 0U ||
+        copy_string_from_user(path, (const char*)arg1, sizeof(path)) != 0 ||
+        syscall_resolve_at_path((int)arg0, path, resolved_path, sizeof(resolved_path)) != 0) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    node_idx = fs_find_node(resolved_path);
+    if (node_idx < 0 || fs_get_node_info(node_idx, &node) != 0) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    if (((uint32_t)arg2 & NARCOS_AT_REMOVEDIR) != 0U) {
+        if (node.flags != FS_NODE_DIR) {
+            syscall_set_result(frame, -1);
+            return;
+        }
+    } else if (node.flags == FS_NODE_DIR) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    syscall_set_result(frame, fs_delete_file(resolved_path));
+}
+
+void syscall_RENAMEAT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+    uintptr_t arg3 = (uintptr_t)regs->arg3;
+    char old_path[SYSCALL_USER_PATH_MAX];
+    char new_path[SYSCALL_USER_PATH_MAX];
+    char resolved_old[SYSCALL_USER_PATH_MAX];
+    char resolved_new[SYSCALL_USER_PATH_MAX];
+
+    if (copy_string_from_user(old_path, (const char*)arg1, sizeof(old_path)) != 0 ||
+        copy_string_from_user(new_path, (const char*)arg3, sizeof(new_path)) != 0 ||
+        syscall_resolve_at_path((int)arg0, old_path, resolved_old, sizeof(resolved_old)) != 0 ||
+        syscall_resolve_at_path((int)arg2, new_path, resolved_new, sizeof(resolved_new)) != 0) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    syscall_set_result(frame, fs_rename(resolved_old, syscall_leaf_name(resolved_new)));
+}
+
+void syscall_MKDIRAT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    char path[SYSCALL_USER_PATH_MAX];
+    char resolved_path[SYSCALL_USER_PATH_MAX];
+
+    if (copy_string_from_user(path, (const char*)arg1, sizeof(path)) != 0 ||
+        syscall_resolve_at_path((int)arg0, path, resolved_path, sizeof(resolved_path)) != 0) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    syscall_set_result(frame, fs_create_dir(resolved_path));
+}
+
+void syscall_FSTATAT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+    char path[SYSCALL_USER_PATH_MAX];
+    char resolved_path[SYSCALL_USER_PATH_MAX];
+    disk_fs_node_t node;
+    narcos_stat_t stat;
+    int node_idx;
+    int status = -1;
+
+    if (copy_string_from_user(path, (const char*)arg1, sizeof(path)) == 0 &&
+        syscall_resolve_at_path((int)arg0, path, resolved_path, sizeof(resolved_path)) == 0) {
+        node_idx = fs_find_node(resolved_path);
+        if (node_idx >= 0 && fs_get_node_info(node_idx, &node) == 0) {
+            syscall_fill_stat_from_node(node_idx, &node, &stat);
+            status = copy_to_user((void*)arg2, &stat, sizeof(stat)) == 0 ? 0 : -1;
+        }
+    }
+    syscall_set_result(frame, status);
+}
+
+void syscall_FACCESSAT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    char path[SYSCALL_USER_PATH_MAX];
+    char resolved_path[SYSCALL_USER_PATH_MAX];
+
+    if (copy_string_from_user(path, (const char*)arg1, sizeof(path)) != 0 ||
+        syscall_resolve_at_path((int)arg0, path, resolved_path, sizeof(resolved_path)) != 0) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    syscall_set_result(frame, fs_find_node(resolved_path) >= 0 ? 0 : -1);
+}
+
+void syscall_FCNTL(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+
+    syscall_set_result(frame, fd_fcntl(process_current(), (int)arg0, (int)arg1, arg2));
+}
+
+void syscall_IOCTL(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+    uint8_t buffer[16];
+    int status;
+
+    memset(buffer, 0, sizeof(buffer));
+    status = fd_ioctl(process_current(), (int)arg0, (uint32_t)arg1, buffer);
+    if (status == 0 && arg2 != 0U && copy_to_user((void*)arg2, buffer, 8U) != 0) status = -1;
+    syscall_set_result(frame, status);
+}
+
+void syscall_DUP(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+
+    syscall_set_result(frame, fd_dup(process_current(), (int)arg0, 0));
+}
+
+void syscall_SET_THREAD_AREA(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    process_t* current = process_current();
+
+    if (!current || current->kind != PROCESS_KIND_USER ||
+        !user_range_in_window(arg0, sizeof(uintptr_t), USER_DATA_WINDOW_BASE, USER_DATA_WINDOW_SIZE)) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+
+    current->arch.user_fs_base = arg0;
+    arch_set_user_fs_base(arg0);
+    syscall_set_result(frame, 0);
+}
+
+void syscall_MMAP(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+    uintptr_t arg3 = (uintptr_t)regs->arg3;
+    uintptr_t arg4 = (uintptr_t)regs->arg4;
+    uintptr_t arg5 = (uintptr_t)regs->arg5;
+
+    syscall_set_result(frame, syscall_user_mmap(arg0, (size_t)arg1, (uint32_t)arg2,
+                                                (uint32_t)arg3, (int)arg4, (uint64_t)arg5));
+}
+
+void syscall_MUNMAP(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+
+    syscall_set_result(frame, syscall_user_munmap(arg0, (size_t)arg1));
+}
+
+void syscall_MPROTECT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    uintptr_t arg1 = (uintptr_t)regs->arg1;
+    uintptr_t arg2 = (uintptr_t)regs->arg2;
+
+    syscall_set_result(frame, syscall_user_mprotect(arg0, (size_t)arg1, (uint32_t)arg2));
+}
+
 void syscall_PROCESS_SNAPSHOT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
     uintptr_t arg0 = (uintptr_t)regs->arg0;
     uintptr_t arg1 = (uintptr_t)regs->arg1;
@@ -1494,6 +2046,26 @@ static syscall_handler_routine syscalltab[] = {
     syscall_NET_GET_STATS,
     syscall_MOUSE_GET_STATE,
     syscall_GUI_SET_INPUT_CAPTURE,
+    syscall_OPENAT,
+    syscall_LSEEK,
+    syscall_FSTAT,
+    syscall_STAT,
+    syscall_BRK,
+    syscall_CLOCK_GETTIME,
+    syscall_NANOSLEEP,
+    syscall_GETDENTS64,
+    syscall_UNLINKAT,
+    syscall_RENAMEAT,
+    syscall_MKDIRAT,
+    syscall_FSTATAT,
+    syscall_FACCESSAT,
+    syscall_FCNTL,
+    syscall_IOCTL,
+    syscall_DUP,
+    syscall_SET_THREAD_AREA,
+    syscall_MMAP,
+    syscall_MUNMAP,
+    syscall_MPROTECT,
 };
 
 void syscall_handler(arch_trap_frame_t* frame) {
@@ -1507,7 +2079,7 @@ void syscall_handler(arch_trap_frame_t* frame) {
         syscall_handler_routine routine = syscalltab[syscall_num];
         routine(frame, &regs);
     } else {
-        syscall_set_result(frame, 0);
+        syscall_set_result(frame, -38);
     }
 
     if (user_kernel_return_mode == USER_KERNEL_RETURN_KERNEL) {
@@ -1517,6 +2089,11 @@ void syscall_handler(arch_trap_frame_t* frame) {
             current->arch.user_frame = *frame;
         }
     } else {
+        process_t* current = process_current();
+
+        if (current && current->kind == PROCESS_KIND_USER) {
+            arch_set_user_fs_base(current->arch.user_fs_base);
+        }
         arch_set_kernel_stack(usermode_active_trap_stack_top());
     }
 }

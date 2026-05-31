@@ -40,6 +40,26 @@ static void x64_cpuid(uint32_t leaf, uint32_t subleaf,
     if (edx) *edx = d;
 }
 
+static void x64_cpu_enable_sse(void) {
+    uint64_t cr0;
+    uint64_t cr4;
+    static const uint32_t default_mxcsr = 0x1F80U;
+
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 &= ~(1ULL << 2); /* CR0.EM: allow x87/SSE instructions. */
+    cr0 |= (1ULL << 1);  /* CR0.MP: monitor WAIT/FWAIT with TS. */
+    __asm__ volatile("mov %0, %%cr0" : : "r"(cr0) : "memory");
+
+    __asm__ volatile("clts" : : : "memory");
+
+    __asm__ volatile("mov %%cr4, %0" : "=r"(cr4));
+    cr4 |= (1ULL << 9) | (1ULL << 10); /* OSFXSR | OSXMMEXCPT. */
+    __asm__ volatile("mov %0, %%cr4" : : "r"(cr4) : "memory");
+
+    __asm__ volatile("fninit");
+    __asm__ volatile("ldmxcsr %0" : : "m"(default_mxcsr));
+}
+
 void x64_cpu_init(void) {
     uint32_t eax = 0;
     uint32_t ebx = 0;
@@ -73,7 +93,6 @@ void x64_cpu_init(void) {
         cpu_info.pat_supported = (int)((edx >> 16) & 0x1U);
         cpu_info.fxsr_supported = (int)((edx >> 24) & 0x1U);
         cpu_info.sse_supported = (int)((edx >> 25) & 0x1U);
-        cpu_info.sse_enabled = cpu_info.sse_supported;
     }
 
     x64_cpuid(0x80000000U, 0, &eax, &ebx, &ecx, &edx);
@@ -91,6 +110,13 @@ void x64_cpu_init(void) {
         cpu_info.pat_wc_enabled = 1;
     }
 
+    if (cpu_info.sse_supported && cpu_info.fxsr_supported) {
+        x64_cpu_enable_sse();
+        cpu_info.sse_enabled = 1;
+    } else {
+        x64_serial_write("[cpu64] SSE unavailable; userland must avoid x86_64 ABI FP paths.\n");
+    }
+
     x64_serial_write("[cpu64] vendor=");
     x64_serial_write(cpu_info.vendor);
     x64_serial_write(" max_basic=");
@@ -99,6 +125,8 @@ void x64_cpu_init(void) {
     x64_serial_write_hex32(cpu_info.max_extended_leaf);
     x64_serial_write(" long_mode=");
     x64_serial_write(cpu_info.long_mode_supported ? "1" : "0");
+    x64_serial_write(" sse_on=");
+    x64_serial_write(cpu_info.sse_enabled ? "1" : "0");
     x64_serial_write(" pat_wc=");
     x64_serial_write(cpu_info.pat_wc_enabled ? "1" : "0");
     x64_serial_write_char('\n');

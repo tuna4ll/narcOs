@@ -1,4 +1,9 @@
 #include "user_lib.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #define PIPE_TEST_TOTAL_BYTES 1097
 #define PIPE_TEST_CHUNK_BYTES 128
@@ -31,53 +36,53 @@ static void pipe_test_u32_to_text(uint32_t value, char* out, int out_len) {
 
 static int pipe_test_writer_main(int argc, char** argv) {
     char buffer[PIPE_TEST_CHUNK_BYTES];
-    int read_fd = 0;
-    int write_fd = 0;
-    int target = 0;
+    int read_fd;
+    int write_fd;
+    int target;
     int written = 0;
 
-    if (argc < 5 ||
-        userlib_parse_i32(argv[2], &read_fd) != 0 ||
-        userlib_parse_i32(argv[3], &write_fd) != 0 ||
-        userlib_parse_i32(argv[4], &target) != 0) {
+    if (argc < 5) {
         return 2;
     }
+    read_fd = (int)strtol(argv[2], 0, 10);
+    write_fd = (int)strtol(argv[3], 0, 10);
+    target = (int)strtol(argv[4], 0, 10);
 
     for (int i = 0; i < (int)sizeof(buffer); i++) buffer[i] = (char)('A' + (i % 26));
-    (void)user_close(read_fd);
+    (void)close(read_fd);
     while (written < target) {
         int want = userlib_min_int(target - written, (int)sizeof(buffer));
-        int rc = user_write(write_fd, buffer, (uint32_t)want);
+        int rc = (int)write(write_fd, buffer, (size_t)want);
 
         if (rc <= 0) return 3;
         written += rc;
     }
-    return user_close(write_fd) == 0 ? 0 : 4;
+    return close(write_fd) == 0 ? 0 : 4;
 }
 
 static int pipe_test_reader_main(int argc, char** argv) {
     char buffer[PIPE_TEST_CHUNK_BYTES];
-    int read_fd = 0;
-    int write_fd = 0;
-    int target = 0;
+    int read_fd;
+    int write_fd;
+    int target;
     int total = 0;
 
-    if (argc < 5 ||
-        userlib_parse_i32(argv[2], &read_fd) != 0 ||
-        userlib_parse_i32(argv[3], &write_fd) != 0 ||
-        userlib_parse_i32(argv[4], &target) != 0) {
+    if (argc < 5) {
         return 2;
     }
+    read_fd = (int)strtol(argv[2], 0, 10);
+    write_fd = (int)strtol(argv[3], 0, 10);
+    target = (int)strtol(argv[4], 0, 10);
 
-    (void)user_close(write_fd);
+    (void)close(write_fd);
     for (;;) {
-        int rc = user_read(read_fd, buffer, sizeof(buffer));
+        int rc = (int)read(read_fd, buffer, sizeof(buffer));
 
         if (rc < 0) return 3;
         if (rc == 0) break;
         total += rc;
     }
-    if (user_close(read_fd) != 0) return 4;
+    if (close(read_fd) != 0) return 4;
     return total == target ? 0 : 5;
 }
 
@@ -93,11 +98,11 @@ int main(int argc, char** argv) {
     const char* writer_argv[5];
     const char* reader_argv[5];
 
-    if (argc > 1 && userlib_strcmp(argv[1], "writer") == 0) return pipe_test_writer_main(argc, argv);
-    if (argc > 1 && userlib_strcmp(argv[1], "reader") == 0) return pipe_test_reader_main(argc, argv);
+    if (argc > 1 && strcmp(argv[1], "writer") == 0) return pipe_test_writer_main(argc, argv);
+    if (argc > 1 && strcmp(argv[1], "reader") == 0) return pipe_test_reader_main(argc, argv);
 
-    if (user_pipe(pipefd) != 0) {
-        userlib_print_error("pipe_test: pipe failed");
+    if (pipe(pipefd) != 0) {
+        fputs("pipe_test: pipe failed\n", stderr);
         return 1;
     }
 
@@ -118,30 +123,30 @@ int main(int argc, char** argv) {
 
     writer_pid = user_spawn("/bin/pipe_test", writer_argv, 5U);
     if (writer_pid < 0) {
-        userlib_print_error("pipe_test: writer spawn failed");
+        fputs("pipe_test: writer spawn failed\n", stderr);
         return 1;
     }
 
     reader_pid = user_spawn("/bin/pipe_test", reader_argv, 5U);
     if (reader_pid < 0) {
-        userlib_print_error("pipe_test: reader spawn failed");
+        fputs("pipe_test: reader spawn failed\n", stderr);
         return 1;
     }
 
-    (void)user_close(pipefd[0]);
-    (void)user_close(pipefd[1]);
+    (void)close(pipefd[0]);
+    (void)close(pipefd[1]);
 
-    rc = user_waitpid(writer_pid, &status, 0U);
+    rc = waitpid(writer_pid, &status, 0);
     if (rc != writer_pid || status != 0) {
-        userlib_print_error("pipe_test: writer failed");
+        fputs("pipe_test: writer failed\n", stderr);
         return 1;
     }
 
-    rc = user_waitpid(reader_pid, &status, 0U);
+    rc = waitpid(reader_pid, &status, 0);
     if (rc != reader_pid || status != 0) {
-        userlib_print_error("pipe_test: reader failed");
+        fputs("pipe_test: reader failed\n", stderr);
         return 1;
     }
 
-    return userlib_println("pipe_test: ok") == 0 ? 0 : 1;
+    return puts("pipe_test: ok") >= 0 ? 0 : 1;
 }

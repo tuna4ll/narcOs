@@ -1,5 +1,6 @@
-#include "fs.h"
-#include "user_lib.h"
+#include <fcntl.h>
+#include <stdio.h>
+#include <unistd.h>
 
 #define CAT_CHUNK_SIZE 256
 
@@ -7,39 +8,40 @@ static int cat_stream_stdin(void) {
     char buffer[CAT_CHUNK_SIZE];
 
     for (;;) {
-        int rc = user_read(USER_STDIN, buffer, sizeof(buffer));
+        ssize_t rc = read(STDIN_FILENO, buffer, sizeof(buffer));
         if (rc < 0) {
-            userlib_print_error("cat: stdin read failed");
+            fputs("cat: stdin read failed\n", stderr);
             return 1;
         }
         if (rc == 0) return 0;
-        if (userlib_write_all(USER_STDOUT, buffer, (uint32_t)rc) != 0) return 1;
+        if (write(STDOUT_FILENO, buffer, (size_t)rc) != rc) return 1;
     }
 }
 
 static int cat_file(const char* path) {
-    disk_fs_node_t node;
     char buffer[CAT_CHUNK_SIZE];
-    uint32_t offset = 0;
-    int idx = user_fs_find_node(path);
+    int fd = open(path, O_RDONLY);
 
-    if (idx < 0 || user_fs_get_node_info(idx, &node) != 0 || node.flags != FS_NODE_FILE) {
-        userlib_print_error("cat: file not found");
+    if (fd < 0) {
+        fputs("cat: open failed\n", stderr);
         return 1;
     }
 
-    while (offset < node.size) {
-        int want = userlib_min_int((int)(node.size - offset), (int)sizeof(buffer));
-        int rc = user_fs_read_raw(path, buffer, (uint32_t)want, offset);
+    for (;;) {
+        ssize_t rc = read(fd, buffer, sizeof(buffer));
 
-        if (rc <= 0) {
-            userlib_print_error("cat: file read failed");
+        if (rc < 0) {
+            fputs("cat: read failed\n", stderr);
+            close(fd);
             return 1;
         }
-        if (userlib_write_all(USER_STDOUT, buffer, (uint32_t)rc) != 0) return 1;
-        offset += (uint32_t)rc;
+        if (rc == 0) break;
+        if (write(STDOUT_FILENO, buffer, (size_t)rc) != rc) {
+            close(fd);
+            return 1;
+        }
     }
-    return 0;
+    return close(fd) == 0 ? 0 : 1;
 }
 
 int main(int argc, char** argv) {

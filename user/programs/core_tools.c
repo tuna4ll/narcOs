@@ -30,6 +30,7 @@ static int core_help_main(void) {
         "  procdump - Dump process table to serial log",
         "  proc_test - Run waitpid/zombie self-test",
         "  pipe_test - Run pipe scheduling self-test",
+        "  args_smoke - Run argc/argv spawn/exec self-test",
         "  credits - Show project credits",
         "  echo    - Print arguments",
         "  spawn   - Launch an external process",

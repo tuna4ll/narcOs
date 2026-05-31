@@ -8,7 +8,7 @@
 
 #define PROCESS_FLAG_USER_EXIT_PENDING 0x00000001U
 #define PROCESS_MAX_ARGS 8
-#define PROCESS_MAX_ARG_LEN 64
+#define PROCESS_MAX_ARG_LEN 256
 #define PROCESS_MAX_FDS 16
 
 typedef struct fd_handle fd_handle_t;

@@ -196,15 +196,19 @@ int main(int argc, char** argv) {
 
     if (userlib_strcmp(command, "https") == 0) return tls_tools_https_main(argc, argv);
     if (userlib_strcmp(command, "fetch") == 0) return tls_tools_fetch_main(argc, argv);
-    if (userlib_strcmp(command, "tls_test") == 0) return tls_tools_test_main(argc, argv);
+    if (userlib_strcmp(command, "tls_test") == 0 || userlib_strcmp(command, "tls-test") == 0) {
+        return tls_tools_test_main(argc, argv);
+    }
 
     if (argc >= 2) {
         command = argv[1];
         if (userlib_strcmp(command, "https") == 0) return tls_tools_https_main(argc - 1, argv + 1);
         if (userlib_strcmp(command, "fetch") == 0) return tls_tools_fetch_main(argc - 1, argv + 1);
-        if (userlib_strcmp(command, "tls_test") == 0) return tls_tools_test_main(argc - 1, argv + 1);
+        if (userlib_strcmp(command, "tls_test") == 0 || userlib_strcmp(command, "tls-test") == 0) {
+            return tls_tools_test_main(argc - 1, argv + 1);
+        }
     }
 
-    userlib_print_error("tls_tools: expected https, fetch, or tls_test");
+    userlib_print_error("tls_tools: expected https, fetch, tls_test, or tls-test");
     return 1;
 }

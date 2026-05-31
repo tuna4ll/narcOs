@@ -57,6 +57,12 @@ static int build_process_initial_stack(process_t* proc, const exec_image_t* imag
     if (sp < (uintptr_t)image->stack_base + sizeof(uint64_t)) return -1;
     sp -= sizeof(uint64_t);
     *(uint64_t*)sp = 0ULL;
+    if (sp < (uintptr_t)image->stack_base + sizeof(uint64_t)) return -1;
+    sp -= sizeof(uint64_t);
+    *(uint64_t*)sp = 0ULL;
+    if (sp < (uintptr_t)image->stack_base + sizeof(uint64_t)) return -1;
+    sp -= sizeof(uint64_t);
+    *(uint64_t*)sp = 0ULL;
     for (int i = proc->user_argc - 1; i >= 0; i--) {
         if (sp < (uintptr_t)image->stack_base + sizeof(uint64_t)) return -1;
         sp -= sizeof(uint64_t);
@@ -129,6 +135,7 @@ int usermode_run_external_process(process_t* proc) {
     user_current_task_frame_ptr = &proc->arch.user_frame;
     user_kernel_return_mode = USER_KERNEL_RETURN_NONE;
     arch_set_kernel_stack(proc->arch.user_trap_stack_top);
+    arch_set_user_fs_base(proc->arch.user_fs_base);
     arch_user_frame_sanitize(&proc->arch.user_frame);
     arch_enter_user(&proc->arch.user_frame);
 

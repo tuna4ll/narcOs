@@ -21,7 +21,7 @@
 #define memcpy user_memcpy
 
 #define SHELL_MAX_ARGV 8
-#define SHELL_ARG_LEN 64
+#define SHELL_ARG_LEN 256
 #define SHELL_PIPE_LEFT_FD 14
 #define SHELL_PIPE_RIGHT_FD 15
 #define SHELL_PROCESS_SNAPSHOT_MAX 16

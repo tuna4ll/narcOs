@@ -1,6 +1,7 @@
 #include "fd.h"
 #include "fs.h"
 #include "memory_alloc.h"
+#include "serial.h"
 #include "string.h"
 
 extern void vga_write(const char* data, uint32_t len);
@@ -21,14 +22,20 @@ static fd_handle_t* fd_create_file_handle(int node_idx, uint32_t access, uint32_
     disk_fs_node_t node;
     fd_handle_t* handle;
 
-    if (node_idx < 0 || fs_get_node_info(node_idx, &node) != 0 || node.flags != FS_NODE_FILE) return 0;
+    if (node_idx < 0 || fs_get_node_info(node_idx, &node) != 0) return 0;
+    if ((open_flags & FD_OPEN_DIRECTORY) != 0U) {
+        if (node.flags != FS_NODE_DIR) return 0;
+    } else if (node.flags != FS_NODE_FILE) {
+        return 0;
+    }
     handle = (fd_handle_t*)malloc(sizeof(fd_handle_t));
     if (!handle) return 0;
     memset(handle, 0, sizeof(*handle));
-    handle->kind = FD_KIND_FILE;
+    handle->kind = node.flags == FS_NODE_DIR ? FD_KIND_DIR : FD_KIND_FILE;
     handle->refs = 1U;
     handle->access = access;
     handle->flags = open_flags;
+    handle->fd_flags = (open_flags & FD_OPEN_CLOEXEC) != 0U ? NARCOS_FD_CLOEXEC : 0U;
     handle->offset = (open_flags & FD_OPEN_APPEND) != 0U ? node.size : 0U;
     handle->u.file.node_idx = node_idx;
     return handle;
@@ -91,6 +98,24 @@ static int fd_install_handle(process_t* proc, fd_handle_t* handle, int target_fd
     if (proc->fd_table[fd]) fd_close(proc, fd);
     proc->fd_table[fd] = handle;
     return fd;
+}
+
+static void fd_fill_stat_from_node(int node_idx, const disk_fs_node_t* node, narcos_stat_t* out_stat) {
+    uint32_t permissions;
+
+    if (!node || !out_stat) return;
+    memset(out_stat, 0, sizeof(*out_stat));
+    permissions = NARCOS_S_IRUSR | NARCOS_S_IRGRP | NARCOS_S_IROTH;
+    if (node->flags == FS_NODE_FILE) permissions |= NARCOS_S_IWUSR | NARCOS_S_IWGRP | NARCOS_S_IWOTH;
+    if (node->flags == FS_NODE_DIR) permissions |= NARCOS_S_IXUSR | NARCOS_S_IXGRP | NARCOS_S_IXOTH;
+
+    out_stat->size = sizeof(*out_stat);
+    out_stat->mode = (node->flags == FS_NODE_DIR ? NARCOS_S_IFDIR : NARCOS_S_IFREG) | permissions;
+    out_stat->nlink = 1U;
+    out_stat->ino = (uint64_t)(uint32_t)(node_idx + 2);
+    out_stat->file_size = node->flags == FS_NODE_FILE ? node->size : 0U;
+    out_stat->blksize = 512U;
+    out_stat->blocks = (out_stat->file_size + 511ULL) / 512ULL;
 }
 
 static int fd_should_abort_wait(process_t* proc) {
@@ -201,9 +226,13 @@ int fd_write(process_t* proc, int fd, const void* buffer, uint32_t len) {
     if (len == 0U) return 0;
     handle = proc->fd_table[fd];
     if (!handle || (handle->access & FD_ACCESS_WRITE) == 0U) return -1;
+    if (handle->kind == FD_KIND_DIR) return -1;
 
     if (handle->kind == FD_KIND_CONSOLE) {
         vga_write((const char*)buffer, len);
+        for (uint32_t i = 0; i < len; i++) {
+            serial_write_char(((const char*)buffer)[i]);
+        }
         return (int)len;
     }
 
@@ -265,6 +294,20 @@ int fd_close(process_t* proc, int fd) {
     return 0;
 }
 
+int fd_dup(process_t* proc, int oldfd, int min_fd) {
+    fd_handle_t* handle;
+    int newfd;
+
+    if (!proc || !fd_slot_valid(oldfd)) return -1;
+    handle = proc->fd_table[oldfd];
+    if (!handle) return -1;
+    newfd = fd_find_free_slot(proc, min_fd);
+    if (!fd_slot_valid(newfd)) return -1;
+    fd_handle_acquire(handle);
+    proc->fd_table[newfd] = handle;
+    return newfd;
+}
+
 int fd_dup2(process_t* proc, int oldfd, int newfd) {
     fd_handle_t* handle;
 
@@ -320,7 +363,8 @@ int fd_open_file(process_t* proc, const char* path, uint32_t access, uint32_t op
 
     if (!proc || !path || path[0] == '\0') return -1;
     node_idx = fs_find_node(path);
-    if (node_idx < 0 && (open_flags & FD_OPEN_CREATE) != 0U) {
+    if (node_idx < 0 && (open_flags & FD_OPEN_CREATE) != 0U &&
+        (open_flags & FD_OPEN_DIRECTORY) == 0U) {
         if (fs_create_file(path) != 0) return -1;
         node_idx = fs_find_node(path);
     }
@@ -337,4 +381,159 @@ int fd_open_file(process_t* proc, const char* path, uint32_t access, uint32_t op
         return -1;
     }
     return installed_fd;
+}
+
+int fd_get_node_idx(process_t* proc, int fd, int* out_node_idx) {
+    fd_handle_t* handle;
+
+    if (!proc || !fd_slot_valid(fd) || !out_node_idx) return -1;
+    handle = proc->fd_table[fd];
+    if (!handle) return -1;
+    if (handle->kind != FD_KIND_FILE && handle->kind != FD_KIND_DIR) return -1;
+    *out_node_idx = handle->u.file.node_idx;
+    return 0;
+}
+
+typedef struct __attribute__((packed)) {
+    uint64_t d_ino;
+    int64_t d_off;
+    uint16_t d_reclen;
+    uint8_t d_type;
+    char d_name[256];
+} fd_linux_dirent64_t;
+
+int fd_getdents64(process_t* proc, int fd, void* buffer, uint32_t len) {
+    fd_handle_t* handle;
+    disk_fs_node_t entries[MAX_FILES];
+    uint32_t written = 0U;
+    int count;
+
+    if (!proc || !fd_slot_valid(fd) || (!buffer && len != 0U)) return -1;
+    handle = proc->fd_table[fd];
+    if (!handle || handle->kind != FD_KIND_DIR) return -1;
+    if (len < sizeof(fd_linux_dirent64_t)) return 0;
+
+    count = fs_list_dir_entries_at(handle->u.file.node_idx, entries, MAX_FILES);
+    if (count < 0) return -1;
+    while (handle->offset < (uint32_t)count && written + sizeof(fd_linux_dirent64_t) <= len) {
+        disk_fs_node_t* node = &entries[handle->offset];
+        fd_linux_dirent64_t dent;
+
+        memset(&dent, 0, sizeof(dent));
+        dent.d_ino = (uint64_t)(handle->offset + 2U);
+        dent.d_off = (int64_t)(handle->offset + 1U);
+        dent.d_reclen = (uint16_t)sizeof(dent);
+        dent.d_type = node->flags == FS_NODE_DIR ? 4U : 8U;
+        strncpy(dent.d_name, node->name, sizeof(dent.d_name) - 1U);
+        memcpy((uint8_t*)buffer + written, &dent, sizeof(dent));
+        written += (uint32_t)sizeof(dent);
+        handle->offset++;
+    }
+    return (int)written;
+}
+
+int fd_lseek(process_t* proc, int fd, int32_t offset, int whence, uint32_t* out_offset) {
+    fd_handle_t* handle;
+    disk_fs_node_t node;
+    int64_t base;
+    int64_t next;
+
+    if (!proc || !fd_slot_valid(fd) || !out_offset) return -1;
+    handle = proc->fd_table[fd];
+    if (!handle || (handle->kind != FD_KIND_FILE && handle->kind != FD_KIND_DIR)) return -1;
+    if (handle->kind == FD_KIND_DIR) {
+        if (whence == NARCOS_SEEK_SET && offset >= 0) handle->offset = (uint32_t)offset;
+        else if (whence == NARCOS_SEEK_CUR && (int64_t)handle->offset + (int64_t)offset >= 0) {
+            handle->offset = (uint32_t)((int64_t)handle->offset + (int64_t)offset);
+        } else return -1;
+        *out_offset = handle->offset;
+        return 0;
+    }
+    if (fs_get_node_info(handle->u.file.node_idx, &node) != 0 || node.flags != FS_NODE_FILE) return -1;
+
+    if (whence == NARCOS_SEEK_SET) base = 0;
+    else if (whence == NARCOS_SEEK_CUR) base = handle->offset;
+    else if (whence == NARCOS_SEEK_END) base = node.size;
+    else return -1;
+
+    next = base + (int64_t)offset;
+    if (next < 0 || next > (int64_t)MAX_FILE_SIZE) return -1;
+    handle->offset = (uint32_t)next;
+    *out_offset = handle->offset;
+    return 0;
+}
+
+int fd_stat(process_t* proc, int fd, narcos_stat_t* out_stat) {
+    fd_handle_t* handle;
+    disk_fs_node_t node;
+
+    if (!proc || !fd_slot_valid(fd) || !out_stat) return -1;
+    handle = proc->fd_table[fd];
+    if (!handle) return -1;
+
+    if (handle->kind == FD_KIND_CONSOLE || handle->kind == FD_KIND_PIPE) {
+        memset(out_stat, 0, sizeof(*out_stat));
+        out_stat->size = sizeof(*out_stat);
+        out_stat->mode = NARCOS_S_IFREG | NARCOS_S_IRUSR | NARCOS_S_IWUSR |
+                         NARCOS_S_IRGRP | NARCOS_S_IWGRP |
+                         NARCOS_S_IROTH | NARCOS_S_IWOTH;
+        out_stat->nlink = 1U;
+        out_stat->blksize = 512U;
+        return 0;
+    }
+
+    if (handle->kind != FD_KIND_FILE && handle->kind != FD_KIND_DIR) return -1;
+    if (fs_get_node_info(handle->u.file.node_idx, &node) != 0) return -1;
+    fd_fill_stat_from_node(handle->u.file.node_idx, &node, out_stat);
+    return 0;
+}
+
+int fd_fcntl(process_t* proc, int fd, int cmd, uintptr_t arg) {
+    fd_handle_t* handle;
+
+    if (!proc || !fd_slot_valid(fd)) return -1;
+    handle = proc->fd_table[fd];
+    if (!handle) return -1;
+
+    switch (cmd) {
+        case NARCOS_F_DUPFD:
+            return fd_dup(proc, fd, (int)arg);
+        case NARCOS_F_GETFD:
+            return (int)handle->fd_flags;
+        case NARCOS_F_SETFD:
+            handle->fd_flags = (uint32_t)arg & NARCOS_FD_CLOEXEC;
+            return 0;
+        case NARCOS_F_GETFL:
+            return (int)handle->flags;
+        case NARCOS_F_SETFL:
+            handle->flags = (handle->flags & ~(FD_OPEN_APPEND | FD_OPEN_NONBLOCK)) |
+                            (((uint32_t)arg & NARCOS_O_APPEND) ? FD_OPEN_APPEND : 0U) |
+                            (((uint32_t)arg & NARCOS_O_NONBLOCK) ? FD_OPEN_NONBLOCK : 0U);
+            return 0;
+        default:
+            return -38;
+    }
+}
+
+typedef struct __attribute__((packed)) {
+    uint16_t ws_row;
+    uint16_t ws_col;
+    uint16_t ws_xpixel;
+    uint16_t ws_ypixel;
+} fd_winsize_t;
+
+int fd_ioctl(process_t* proc, int fd, uint32_t request, void* user_arg) {
+    fd_handle_t* handle;
+    fd_winsize_t wsz;
+
+    if (!proc || !fd_slot_valid(fd)) return -1;
+    handle = proc->fd_table[fd];
+    if (!handle) return -1;
+    if (request != NARCOS_TIOCGWINSZ) return -38;
+    if (handle->kind != FD_KIND_CONSOLE) return -25;
+    memset(&wsz, 0, sizeof(wsz));
+    wsz.ws_row = 25U;
+    wsz.ws_col = 80U;
+    if (user_arg) memcpy(user_arg, &wsz, sizeof(wsz));
+    return 0;
 }
