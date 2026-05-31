@@ -13,6 +13,17 @@
 #define strncpy user_strncpy
 #define memset user_memset
 
+#define FOLDER_ICON_W 44
+#define FOLDER_ICON_H 44
+
+#if defined(__x86_64__)
+extern const uint8_t _binary_obj_x86_64_user_assets_folder_icon_rgba_start[];
+extern const uint8_t _binary_obj_x86_64_user_assets_text_icon_rgba_start[];
+#else
+extern const uint8_t _binary_obj_i386_user_assets_folder_icon_rgba_start[];
+extern const uint8_t _binary_obj_i386_user_assets_text_icon_rgba_start[];
+#endif
+
 static USER_CODE int explorer_append_text(char* dst, int dst_len, const char* src);
 static USER_CODE int explorer_append_uint(char* dst, int dst_len, uint32_t value);
 static USER_CODE void explorer_build_path_for_idx(int idx, char* out, int out_len);
@@ -87,11 +98,23 @@ static USER_CODE void explorer_draw_panel_flat(user_gui_surface_t* surface, int 
 }
 
 static USER_CODE void explorer_draw_folder_icon(user_gui_surface_t* surface, int x, int y, int selected) {
-    user_gui_draw_icon(surface, USER_GUI_ICON_FOLDER, x, y, 28, selected ? UI_ACCENT_ALT : UI_FOLDER, selected);
+#if defined(__x86_64__)
+    const uint8_t* icon = _binary_obj_x86_64_user_assets_folder_icon_rgba_start;
+#else
+    const uint8_t* icon = _binary_obj_i386_user_assets_folder_icon_rgba_start;
+#endif
+    (void)selected;
+    user_gui_draw_rgba_bitmap_scaled(surface, icon, FOLDER_ICON_W, FOLDER_ICON_H, x, y, 28);
 }
 
 static USER_CODE void explorer_draw_file_icon(user_gui_surface_t* surface, int x, int y, int selected) {
-    user_gui_draw_icon(surface, USER_GUI_ICON_FILE, x, y, 28, selected ? UI_ACCENT_ALT : UI_FILE, selected);
+#if defined(__x86_64__)
+    const uint8_t* icon = _binary_obj_x86_64_user_assets_text_icon_rgba_start;
+#else
+    const uint8_t* icon = _binary_obj_i386_user_assets_text_icon_rgba_start;
+#endif
+    (void)selected;
+    user_gui_draw_rgba_bitmap_scaled(surface, icon, FOLDER_ICON_W, FOLDER_ICON_H, x, y, 28);
 }
 
 static USER_CODE void explorer_draw_chip_left(user_gui_surface_t* surface, int x, int y, int w, int h,

@@ -445,6 +445,23 @@ static USER_CODE __attribute__((unused)) void user_gui_icon_fill(user_gui_surfac
     user_gui_fill_rect(surface, sx, sy, sw, sh, color);
 }
 
+static USER_CODE __attribute__((unused)) void user_gui_draw_rgba_bitmap_scaled(user_gui_surface_t* surface,
+                                                                              const uint8_t* rgba,
+                                                                              int src_w, int src_h,
+                                                                              int x, int y, int size) {
+    if (!surface || !rgba || src_w <= 0 || src_h <= 0 || size <= 0) return;
+    for (int dy = 0; dy < size; dy++) {
+        int sy = (dy * src_h) / size;
+        for (int dx = 0; dx < size; dx++) {
+            int sx = (dx * src_w) / size;
+            const uint8_t* px = rgba + (((size_t)sy * (size_t)src_w) + (size_t)sx) * 4U;
+            uint32_t color = ((uint32_t)px[0] << 16) | ((uint32_t)px[1] << 8) | (uint32_t)px[2];
+
+            if (px[3] != 0U) user_gui_put_pixel_alpha(surface, x + dx, y + dy, color, px[3]);
+        }
+    }
+}
+
 static USER_CODE __attribute__((unused)) void user_gui_draw_icon(user_gui_surface_t* surface, int icon,
                                                                 int x, int y, int size,
                                                                 uint32_t accent, int selected) {

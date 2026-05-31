@@ -50,6 +50,8 @@
 #define DESKTOP_ICON_GAP_Y 16
 #define DESKTOP_ICON_GLYPH_BOX 50
 #define DESKTOP_ICON_GLYPH_SIZE 44
+#define DESKTOP_FOLDER_ICON_W 44
+#define DESKTOP_FOLDER_ICON_H 44
 #define DESKTOP_ICON_LABEL_Y 72
 #define DESKTOP_ICON_TEXT_MAX 11
 #define DESKTOP_ICON_CACHE_TICKS 100U
@@ -64,11 +66,23 @@
 #define DESKTOP_BG_H 126
 extern const uint8_t _binary_obj_x86_64_user_assets_desktop_bg_rgb_start[];
 extern const uint8_t _binary_obj_x86_64_user_assets_desktop_bg_rgb_end[];
+extern const uint8_t _binary_obj_x86_64_user_assets_folder_icon_rgba_start[];
+extern const uint8_t _binary_obj_x86_64_user_assets_text_icon_rgba_start[];
+extern const uint8_t _binary_obj_x86_64_user_assets_settings_icon_rgba_start[];
+extern const uint8_t _binary_obj_x86_64_user_assets_this_pc_icon_rgba_start[];
+extern const uint8_t _binary_obj_x86_64_user_assets_snake_icon_rgba_start[];
+extern const uint8_t _binary_obj_x86_64_user_assets_doom_icon_rgba_start[];
 #else
 #define DESKTOP_BG_W 320
 #define DESKTOP_BG_H 180
 extern const uint8_t _binary_obj_i386_user_assets_desktop_bg_rgb_start[];
 extern const uint8_t _binary_obj_i386_user_assets_desktop_bg_rgb_end[];
+extern const uint8_t _binary_obj_i386_user_assets_folder_icon_rgba_start[];
+extern const uint8_t _binary_obj_i386_user_assets_text_icon_rgba_start[];
+extern const uint8_t _binary_obj_i386_user_assets_settings_icon_rgba_start[];
+extern const uint8_t _binary_obj_i386_user_assets_this_pc_icon_rgba_start[];
+extern const uint8_t _binary_obj_i386_user_assets_snake_icon_rgba_start[];
+extern const uint8_t _binary_obj_i386_user_assets_doom_icon_rgba_start[];
 #endif
 
 typedef struct {
@@ -413,6 +427,75 @@ static int desktop_icon_to_user_gui_icon(int kind) {
         case DESKTOP_ICON_KIND_DOOM: return USER_GUI_ICON_DOOM;
         case DESKTOP_ICON_KIND_FILE: return USER_GUI_ICON_FILE;
         default: return USER_GUI_ICON_APP;
+    }
+}
+
+static const uint8_t* desktop_folder_icon_rgba(void) {
+#if defined(__x86_64__)
+    return _binary_obj_x86_64_user_assets_folder_icon_rgba_start;
+#else
+    return _binary_obj_i386_user_assets_folder_icon_rgba_start;
+#endif
+}
+
+static const uint8_t* desktop_text_icon_rgba(void) {
+#if defined(__x86_64__)
+    return _binary_obj_x86_64_user_assets_text_icon_rgba_start;
+#else
+    return _binary_obj_i386_user_assets_text_icon_rgba_start;
+#endif
+}
+
+static const uint8_t* desktop_settings_icon_rgba(void) {
+#if defined(__x86_64__)
+    return _binary_obj_x86_64_user_assets_settings_icon_rgba_start;
+#else
+    return _binary_obj_i386_user_assets_settings_icon_rgba_start;
+#endif
+}
+
+static const uint8_t* desktop_this_pc_icon_rgba(void) {
+#if defined(__x86_64__)
+    return _binary_obj_x86_64_user_assets_this_pc_icon_rgba_start;
+#else
+    return _binary_obj_i386_user_assets_this_pc_icon_rgba_start;
+#endif
+}
+
+static const uint8_t* desktop_snake_icon_rgba(void) {
+#if defined(__x86_64__)
+    return _binary_obj_x86_64_user_assets_snake_icon_rgba_start;
+#else
+    return _binary_obj_i386_user_assets_snake_icon_rgba_start;
+#endif
+}
+
+static const uint8_t* desktop_doom_icon_rgba(void) {
+#if defined(__x86_64__)
+    return _binary_obj_x86_64_user_assets_doom_icon_rgba_start;
+#else
+    return _binary_obj_i386_user_assets_doom_icon_rgba_start;
+#endif
+}
+
+static const uint8_t* desktop_bitmap_icon_for_kind(int kind) {
+    switch (kind) {
+        case DESKTOP_ICON_KIND_THIS_PC: return desktop_this_pc_icon_rgba();
+        case DESKTOP_ICON_KIND_FILE: return desktop_text_icon_rgba();
+        case DESKTOP_ICON_KIND_DIR: return desktop_folder_icon_rgba();
+        case DESKTOP_ICON_KIND_SETTINGS: return desktop_settings_icon_rgba();
+        case DESKTOP_ICON_KIND_SNAKE: return desktop_snake_icon_rgba();
+        case DESKTOP_ICON_KIND_DOOM: return desktop_doom_icon_rgba();
+        default: return 0;
+    }
+}
+
+static const uint8_t* desktop_bitmap_icon_for_user_gui_icon(int icon) {
+    switch (icon) {
+        case USER_GUI_ICON_SETTINGS: return desktop_settings_icon_rgba();
+        case USER_GUI_ICON_SNAKE: return desktop_snake_icon_rgba();
+        case USER_GUI_ICON_DOOM: return desktop_doom_icon_rgba();
+        default: return 0;
     }
 }
 
@@ -839,6 +922,15 @@ static void format_clock_text(char* dst, size_t dst_size) {
     dst[8] = '\0';
 }
 
+static int clock_text_equal(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    for (int i = 0; i < 12; i++) {
+        if (a[i] != b[i]) return 0;
+        if (a[i] == '\0') return 1;
+    }
+    return 1;
+}
+
 static void draw_desktop_icon(user_gui_surface_t* surface, int kind, int x, int y, const char* label,
                               uint32_t accent, int hovered) {
     int card_x = x + 4;
@@ -889,8 +981,19 @@ static void draw_desktop_icon(user_gui_surface_t* surface, int kind, int x, int 
         glyph_x = glyph_box_x + (DESKTOP_ICON_GLYPH_BOX - DESKTOP_ICON_GLYPH_SIZE) / 2;
         glyph_y = glyph_box_y + (DESKTOP_ICON_GLYPH_BOX - DESKTOP_ICON_GLYPH_SIZE) / 2;
         if (hovered) glyph_y -= 1;
-        user_gui_draw_icon(surface, desktop_icon_to_user_gui_icon(kind), glyph_x, glyph_y,
-                           DESKTOP_ICON_GLYPH_SIZE, accent, hovered);
+        {
+            const uint8_t* bitmap_icon = desktop_bitmap_icon_for_kind(kind);
+
+            if (bitmap_icon) {
+                (void)accent;
+                user_gui_draw_rgba_bitmap_scaled(surface, bitmap_icon,
+                                                 DESKTOP_FOLDER_ICON_W, DESKTOP_FOLDER_ICON_H,
+                                                 glyph_x, glyph_y, DESKTOP_ICON_GLYPH_SIZE);
+            } else {
+                user_gui_draw_icon(surface, desktop_icon_to_user_gui_icon(kind), glyph_x, glyph_y,
+                                   DESKTOP_ICON_GLYPH_SIZE, accent, hovered);
+            }
+        }
 
         label_len = text_length(label);
         label_chip_w = label_len * 8 + 18;
@@ -1236,7 +1339,9 @@ static void draw_taskbar_legacy(user_gui_surface_t* surface, int width, const gu
                              0x4C5661, UI_TASKBAR_PANEL, 0x20262D, 0,
                              clip_x, clip_y, clip_w, clip_h);
     if (rects_intersect(clip_x, clip_y, clip_w, clip_h, settings_x, bar_y, SETTINGS_BUTTON_W, START_BUTTON_H)) {
-        user_gui_draw_icon(surface, USER_GUI_ICON_SETTINGS, settings_x + 10, bar_y + 4, 17, UI_ACCENT_ALT, 0);
+        user_gui_draw_rgba_bitmap_scaled(surface, desktop_settings_icon_rgba(),
+                                         DESKTOP_FOLDER_ICON_W, DESKTOP_FOLDER_ICON_H,
+                                         settings_x + 10, bar_y + 4, 17);
         draw_string_clipped(surface, settings_x + 33, bar_y + 9, "Settings", UI_TEXT,
                             clip_x, clip_y, clip_w, clip_h);
     }
@@ -1990,8 +2095,18 @@ static void render_frame(uint32_t* framebuffer, int pitch_pixels, int width, int
             draw_panel_elevated_clipped(&surface, MENU_X + 10, item_y, MENU_W - 20, MENU_ITEM_H - 6, UI_RADIUS_SM,
                                         fill_top, fill_bottom, border, i == hovered_item ? UI_ACCENT_ALT : 0U,
                                         dirty_x, dirty_y, dirty_w, dirty_h);
-            user_gui_draw_icon(&surface, menu_item_icons[i], MENU_X + 18, item_y + 5, 22,
-                               i == hovered_item ? UI_TEXT_DARK : UI_ACCENT_ALT, i == hovered_item);
+            {
+                const uint8_t* bitmap_icon = desktop_bitmap_icon_for_user_gui_icon(menu_item_icons[i]);
+
+                if (bitmap_icon) {
+                    user_gui_draw_rgba_bitmap_scaled(&surface, bitmap_icon,
+                                                     DESKTOP_FOLDER_ICON_W, DESKTOP_FOLDER_ICON_H,
+                                                     MENU_X + 18, item_y + 5, 22);
+                } else {
+                    user_gui_draw_icon(&surface, menu_item_icons[i], MENU_X + 18, item_y + 5, 22,
+                                       i == hovered_item ? UI_TEXT_DARK : UI_ACCENT_ALT, i == hovered_item);
+                }
+            }
             draw_tall_string_clipped(&surface, MENU_X + 48, item_y + 4, menu_items[i].label, title, UI_SHADOW,
                                      dirty_x, dirty_y, dirty_w, dirty_h);
             draw_string_clipped(&surface, MENU_X + 48, item_y + 22, menu_items[i].subtitle, subtitle,
@@ -2065,7 +2180,6 @@ int main(void) {
     int resize_start_w = 0;
     int resize_start_h = 0;
     uint32_t last_click_tick = 0;
-    uint32_t last_clock_second = 0;
     int last_click_window_id = -1;
     int last_click_button = 0;
     int last_desktop_icon = -1;
@@ -2074,6 +2188,7 @@ int main(void) {
     int surface_cache_dirty = 1;
     char status_text[96];
     char pending_open_path[256];
+    char displayed_clock_text[12];
     uint32_t* framebuffer;
     uint32_t framebuffer_pixels;
     uint32_t last_surface_sync_tick = 0;
@@ -2157,7 +2272,7 @@ int main(void) {
                                surface_cache_flags, 1);
     surface_cache_dirty = 0;
     last_surface_sync_tick = user_uptime_ticks();
-    last_clock_second = last_surface_sync_tick / 100U;
+    format_clock_text(displayed_clock_text, sizeof(displayed_clock_text));
     render_frame(framebuffer, width, width, height, 0, 0, width, height, focused, mouse_x, mouse_y, click_count,
                  menu_visible, hovered_item, hovered_task_slot,
                  context_visible, context_x, context_y, hovered_context_item,
@@ -2182,8 +2297,16 @@ int main(void) {
         int redraw = 0;
         int yield_after_dispatch = 0;
         int processed_events = 0;
+        int clock_dirty = 0;
+        char pending_clock_text[12];
 
         dirty_valid = 0;
+        format_clock_text(pending_clock_text, sizeof(pending_clock_text));
+        if (!clock_text_equal(displayed_clock_text, pending_clock_text)) {
+            clock_dirty = 1;
+            redraw = 1;
+            mark_clock_dirty(&dirty_valid, &dirty_x, &dirty_y, &dirty_w, &dirty_h, width, height);
+        }
 
         for (int batch = 0; batch < 8; batch++) {
             int status = user_gui_poll_desktop_event(&desktop_event);
@@ -2197,14 +2320,7 @@ int main(void) {
                 status = user_gui_poll_event(handle, &event);
                 if (status == 0) {
                     if (processed_events == 0) {
-                        uint32_t now_second = user_uptime_ticks() / 100U;
-
-                        if (now_second != last_clock_second) {
-                            last_clock_second = now_second;
-                            redraw = 1;
-                            mark_clock_dirty(&dirty_valid, &dirty_x, &dirty_y, &dirty_w, &dirty_h, width, height);
-                            break;
-                        }
+                        if (redraw) break;
                         user_yield();
                         goto desktop_loop_continue;
                     }
@@ -2861,7 +2977,7 @@ int main(void) {
                 desktop_log("[desktop] present failed");
                 break;
             }
-            last_clock_second = user_uptime_ticks() / 100U;
+            if (clock_dirty) copy_text(displayed_clock_text, sizeof(displayed_clock_text), pending_clock_text);
         }
         if (yield_after_dispatch) user_yield();
 desktop_loop_continue:

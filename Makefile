@@ -112,6 +112,19 @@ I386_ASSET_LOGO_RGB = $(I386_OBJ_DIR)/assets/logo.rgb
 I386_ASSET_LOGO_OBJECT = $(I386_OBJ_DIR)/assets/logo.o
 I386_DESKTOP_ASSET_BG_RGB = $(I386_OBJ_DIR)/user/assets/desktop_bg.rgb
 I386_DESKTOP_ASSET_BG_OBJECT = $(I386_OBJ_DIR)/user/assets/desktop_bg.o
+I386_FOLDER_ICON_RGBA = $(I386_OBJ_DIR)/user/assets/folder_icon.rgba
+I386_FOLDER_ICON_OBJECT = $(I386_OBJ_DIR)/user/assets/folder_icon.o
+I386_TEXT_ICON_RGBA = $(I386_OBJ_DIR)/user/assets/text_icon.rgba
+I386_TEXT_ICON_OBJECT = $(I386_OBJ_DIR)/user/assets/text_icon.o
+I386_SETTINGS_ICON_RGBA = $(I386_OBJ_DIR)/user/assets/settings_icon.rgba
+I386_SETTINGS_ICON_OBJECT = $(I386_OBJ_DIR)/user/assets/settings_icon.o
+I386_THIS_PC_ICON_RGBA = $(I386_OBJ_DIR)/user/assets/this_pc_icon.rgba
+I386_THIS_PC_ICON_OBJECT = $(I386_OBJ_DIR)/user/assets/this_pc_icon.o
+I386_SNAKE_ICON_RGBA = $(I386_OBJ_DIR)/user/assets/snake_icon.rgba
+I386_SNAKE_ICON_OBJECT = $(I386_OBJ_DIR)/user/assets/snake_icon.o
+I386_DOOM_ICON_RGBA = $(I386_OBJ_DIR)/user/assets/doom_icon.rgba
+I386_DOOM_ICON_OBJECT = $(I386_OBJ_DIR)/user/assets/doom_icon.o
+I386_COMMON_ICON_OBJECTS = $(I386_FOLDER_ICON_OBJECT) $(I386_TEXT_ICON_OBJECT) $(I386_SETTINGS_ICON_OBJECT) $(I386_THIS_PC_ICON_OBJECT) $(I386_SNAKE_ICON_OBJECT) $(I386_DOOM_ICON_OBJECT)
 I386_USER_CRT_OBJECT = $(I386_OBJ_DIR)/user/crt0.o
 I386_DOOM_BINARY = $(I386_OBJ_DIR)/user/bin/doom
 I386_POSIX_SMOKE_BINARY = $(I386_OBJ_DIR)/user/bin/posix_smoke
@@ -195,6 +208,19 @@ X86_64_ASSET_LOGO_RGB = $(X86_64_OBJ_DIR)/assets/logo.rgb
 X86_64_ASSET_LOGO_OBJECT = $(X86_64_OBJ_DIR)/assets/logo.o
 X86_64_DESKTOP_ASSET_BG_RGB = $(X86_64_OBJ_DIR)/user/assets/desktop_bg.rgb
 X86_64_DESKTOP_ASSET_BG_OBJECT = $(X86_64_OBJ_DIR)/user/assets/desktop_bg.o
+X86_64_FOLDER_ICON_RGBA = $(X86_64_OBJ_DIR)/user/assets/folder_icon.rgba
+X86_64_FOLDER_ICON_OBJECT = $(X86_64_OBJ_DIR)/user/assets/folder_icon.o
+X86_64_TEXT_ICON_RGBA = $(X86_64_OBJ_DIR)/user/assets/text_icon.rgba
+X86_64_TEXT_ICON_OBJECT = $(X86_64_OBJ_DIR)/user/assets/text_icon.o
+X86_64_SETTINGS_ICON_RGBA = $(X86_64_OBJ_DIR)/user/assets/settings_icon.rgba
+X86_64_SETTINGS_ICON_OBJECT = $(X86_64_OBJ_DIR)/user/assets/settings_icon.o
+X86_64_THIS_PC_ICON_RGBA = $(X86_64_OBJ_DIR)/user/assets/this_pc_icon.rgba
+X86_64_THIS_PC_ICON_OBJECT = $(X86_64_OBJ_DIR)/user/assets/this_pc_icon.o
+X86_64_SNAKE_ICON_RGBA = $(X86_64_OBJ_DIR)/user/assets/snake_icon.rgba
+X86_64_SNAKE_ICON_OBJECT = $(X86_64_OBJ_DIR)/user/assets/snake_icon.o
+X86_64_DOOM_ICON_RGBA = $(X86_64_OBJ_DIR)/user/assets/doom_icon.rgba
+X86_64_DOOM_ICON_OBJECT = $(X86_64_OBJ_DIR)/user/assets/doom_icon.o
+X86_64_COMMON_ICON_OBJECTS = $(X86_64_FOLDER_ICON_OBJECT) $(X86_64_TEXT_ICON_OBJECT) $(X86_64_SETTINGS_ICON_OBJECT) $(X86_64_THIS_PC_ICON_OBJECT) $(X86_64_SNAKE_ICON_OBJECT) $(X86_64_DOOM_ICON_OBJECT)
 X86_64_USER_CRT_OBJECT = $(X86_64_OBJ_DIR)/user/crt0_x86_64.o
 X86_64_DOOM_BINARY = $(X86_64_OBJ_DIR)/user/bin/doom
 X86_64_POSIX_SMOKE_BINARY = $(X86_64_OBJ_DIR)/user/bin/posix_smoke
@@ -332,6 +358,9 @@ $(I386_OBJ_DIR)/user/programs/%.o: $(USER_DIR)/programs/%.c $(USER_DIR)/include/
 	@mkdir -p $(dir $@)
 	$(CC) $(I386_USER_CFLAGS) -c $< -o $@
 
+$(I386_OBJ_DIR)/user/programs/desktop.o: $(KERN_DIR)/apps/user_gui_lib.h
+$(I386_OBJ_DIR)/user/programs/explorer.o: $(KERN_DIR)/apps/user_explorer.c $(KERN_DIR)/apps/user_gui_lib.h $(KERN_DIR)/apps/user_string.h
+
 $(I386_OBJ_DIR)/user/programs/doom.o: $(USER_DIR)/programs/doom.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile $(I386_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(I386_DOOM_CFLAGS) $(I386_USER_CFLAGS) -c $< -o $@
@@ -363,7 +392,12 @@ $(I386_USER_TLS_BINARIES): $(I386_OBJ_DIR)/user/bin/%: $(I386_MUSL_CRT1) $(I386_
 	$(LD) $(I386_USER_LDFLAGS) -o $@ $(I386_MUSL_CRT1) $(filter-out $(I386_MUSL_CRT1),$(filter %.o,$^)) --start-group $(I386_MUSL_LIBC) $(I386_LIBGCC) --end-group
 	@echo "[OK] i386 user: $@ ($$(wc -c < $@) byte)"
 
-$(I386_OBJ_DIR)/user/bin/desktop: $(I386_MUSL_CRT1) $(I386_OBJ_DIR)/user/programs/desktop.o $(I386_DESKTOP_ASSET_BG_OBJECT) $(I386_MUSL_LIBC) $(USER_DIR)/linker.ld
+$(I386_OBJ_DIR)/user/bin/desktop: $(I386_MUSL_CRT1) $(I386_OBJ_DIR)/user/programs/desktop.o $(I386_DESKTOP_ASSET_BG_OBJECT) $(I386_COMMON_ICON_OBJECTS) $(I386_MUSL_LIBC) $(USER_DIR)/linker.ld
+	@mkdir -p $(dir $@)
+	$(LD) $(I386_USER_LDFLAGS) -o $@ $(I386_MUSL_CRT1) $(filter-out $(I386_MUSL_CRT1),$(filter %.o,$^)) --start-group $(I386_MUSL_LIBC) $(I386_LIBGCC) --end-group
+	@echo "[OK] i386 user: $@ ($$(wc -c < $@) byte)"
+
+$(I386_OBJ_DIR)/user/bin/explorer: $(I386_MUSL_CRT1) $(I386_OBJ_DIR)/user/programs/explorer.o $(I386_FOLDER_ICON_OBJECT) $(I386_TEXT_ICON_OBJECT) $(I386_MUSL_LIBC) $(USER_DIR)/linker.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(I386_USER_LDFLAGS) -o $@ $(I386_MUSL_CRT1) $(filter-out $(I386_MUSL_CRT1),$(filter %.o,$^)) --start-group $(I386_MUSL_LIBC) $(I386_LIBGCC) --end-group
 	@echo "[OK] i386 user: $@ ($$(wc -c < $@) byte)"
@@ -393,6 +427,54 @@ $(I386_DESKTOP_ASSET_BG_RGB): $(ASSET_DIR)/bg.png Makefile
 	magick $< -filter Lanczos -resize 320x180^ -gravity center -extent 320x180 -alpha off -depth 8 rgb:$@
 
 $(I386_DESKTOP_ASSET_BG_OBJECT): $(I386_DESKTOP_ASSET_BG_RGB)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_i386 $< -o $@
+
+$(I386_FOLDER_ICON_RGBA): $(ASSET_DIR)/icon/folder.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(I386_FOLDER_ICON_OBJECT): $(I386_FOLDER_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_i386 $< -o $@
+
+$(I386_TEXT_ICON_RGBA): $(ASSET_DIR)/icon/text.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(I386_TEXT_ICON_OBJECT): $(I386_TEXT_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_i386 $< -o $@
+
+$(I386_SETTINGS_ICON_RGBA): $(ASSET_DIR)/icon/settings.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(I386_SETTINGS_ICON_OBJECT): $(I386_SETTINGS_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_i386 $< -o $@
+
+$(I386_THIS_PC_ICON_RGBA): $(ASSET_DIR)/icon/this_pc.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(I386_THIS_PC_ICON_OBJECT): $(I386_THIS_PC_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_i386 $< -o $@
+
+$(I386_SNAKE_ICON_RGBA): $(ASSET_DIR)/icon/snake.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(I386_SNAKE_ICON_OBJECT): $(I386_SNAKE_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_i386 $< -o $@
+
+$(I386_DOOM_ICON_RGBA): $(ASSET_DIR)/icon/doom.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(I386_DOOM_ICON_OBJECT): $(I386_DOOM_ICON_RGBA)
 	@mkdir -p $(dir $@)
 	$(LD) -r -b binary -m elf_i386 $< -o $@
 
@@ -461,6 +543,9 @@ $(X86_64_OBJ_DIR)/user/programs/%.o: $(USER_DIR)/programs/%.c $(USER_DIR)/includ
 	@mkdir -p $(dir $@)
 	$(CC) $(X86_64_USER_CFLAGS) -c $< -o $@
 
+$(X86_64_OBJ_DIR)/user/programs/desktop.o: $(KERN_DIR)/apps/user_gui_lib.h
+$(X86_64_OBJ_DIR)/user/programs/explorer.o: $(KERN_DIR)/apps/user_explorer.c $(KERN_DIR)/apps/user_gui_lib.h $(KERN_DIR)/apps/user_string.h
+
 $(X86_64_OBJ_DIR)/user/programs/doom.o: $(USER_DIR)/programs/doom.c $(USER_DIR)/include/user_lib.h $(USER_PROGRAM_HEADERS) Makefile $(X86_64_MUSL_LIBC)
 	@mkdir -p $(dir $@)
 	$(CC) $(X86_64_DOOM_CFLAGS) $(X86_64_USER_CFLAGS) -c $< -o $@
@@ -492,7 +577,12 @@ $(X86_64_USER_TLS_BINARIES): $(X86_64_OBJ_DIR)/user/bin/%: $(X86_64_MUSL_CRT1) $
 	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(X86_64_MUSL_CRT1) $(filter-out $(X86_64_MUSL_CRT1),$(filter %.o,$^)) --start-group $(X86_64_MUSL_LIBC) $(X86_64_LIBGCC) --end-group
 	@echo "[OK] x86_64 user: $@ ($$(wc -c < $@) byte)"
 
-$(X86_64_OBJ_DIR)/user/bin/desktop: $(X86_64_MUSL_CRT1) $(X86_64_OBJ_DIR)/user/programs/desktop.o $(X86_64_DESKTOP_ASSET_BG_OBJECT) $(X86_64_MUSL_LIBC) $(USER_DIR)/linker_x86_64.ld
+$(X86_64_OBJ_DIR)/user/bin/desktop: $(X86_64_MUSL_CRT1) $(X86_64_OBJ_DIR)/user/programs/desktop.o $(X86_64_DESKTOP_ASSET_BG_OBJECT) $(X86_64_COMMON_ICON_OBJECTS) $(X86_64_MUSL_LIBC) $(USER_DIR)/linker_x86_64.ld
+	@mkdir -p $(dir $@)
+	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(X86_64_MUSL_CRT1) $(filter-out $(X86_64_MUSL_CRT1),$(filter %.o,$^)) --start-group $(X86_64_MUSL_LIBC) $(X86_64_LIBGCC) --end-group
+	@echo "[OK] x86_64 user: $@ ($$(wc -c < $@) byte)"
+
+$(X86_64_OBJ_DIR)/user/bin/explorer: $(X86_64_MUSL_CRT1) $(X86_64_OBJ_DIR)/user/programs/explorer.o $(X86_64_FOLDER_ICON_OBJECT) $(X86_64_TEXT_ICON_OBJECT) $(X86_64_MUSL_LIBC) $(USER_DIR)/linker_x86_64.ld
 	@mkdir -p $(dir $@)
 	$(LD) -m elf_x86_64 -T $(USER_DIR)/linker_x86_64.ld -nostdlib -s --strip-all -o $@ $(X86_64_MUSL_CRT1) $(filter-out $(X86_64_MUSL_CRT1),$(filter %.o,$^)) --start-group $(X86_64_MUSL_LIBC) $(X86_64_LIBGCC) --end-group
 	@echo "[OK] x86_64 user: $@ ($$(wc -c < $@) byte)"
@@ -522,6 +612,54 @@ $(X86_64_DESKTOP_ASSET_BG_RGB): $(ASSET_DIR)/bg.png Makefile
 	magick $< -filter Lanczos -resize 224x126^ -gravity center -extent 224x126 -alpha off -depth 8 rgb:$@
 
 $(X86_64_DESKTOP_ASSET_BG_OBJECT): $(X86_64_DESKTOP_ASSET_BG_RGB)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_x86_64 $< -o $@
+
+$(X86_64_FOLDER_ICON_RGBA): $(ASSET_DIR)/icon/folder.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(X86_64_FOLDER_ICON_OBJECT): $(X86_64_FOLDER_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_x86_64 $< -o $@
+
+$(X86_64_TEXT_ICON_RGBA): $(ASSET_DIR)/icon/text.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(X86_64_TEXT_ICON_OBJECT): $(X86_64_TEXT_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_x86_64 $< -o $@
+
+$(X86_64_SETTINGS_ICON_RGBA): $(ASSET_DIR)/icon/settings.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(X86_64_SETTINGS_ICON_OBJECT): $(X86_64_SETTINGS_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_x86_64 $< -o $@
+
+$(X86_64_THIS_PC_ICON_RGBA): $(ASSET_DIR)/icon/this_pc.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(X86_64_THIS_PC_ICON_OBJECT): $(X86_64_THIS_PC_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_x86_64 $< -o $@
+
+$(X86_64_SNAKE_ICON_RGBA): $(ASSET_DIR)/icon/snake.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(X86_64_SNAKE_ICON_OBJECT): $(X86_64_SNAKE_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_x86_64 $< -o $@
+
+$(X86_64_DOOM_ICON_RGBA): $(ASSET_DIR)/icon/doom.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(X86_64_DOOM_ICON_OBJECT): $(X86_64_DOOM_ICON_RGBA)
 	@mkdir -p $(dir $@)
 	$(LD) -r -b binary -m elf_x86_64 $< -o $@
 

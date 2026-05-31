@@ -119,6 +119,7 @@ int main(void) {
     if (print_text_line(line++, C_YELLOW "Credits" C_RESET) != 0) return 1;
     if (print_person_line(line++, "Tuna Kilic (Tuna4l)", "Maintainer") != 0) return 1;
     if (print_person_line(line++, "Burak Elibol", "Designer") != 0) return 1;
+    if (print_person_line(line++, "Sevval Ekinci", "Designer") != 0) return 1;
     if (print_text_line(line++, "") != 0) return 1;
     if (print_text_line(line++, C_DIM "Built with caffeine." C_RESET) != 0) return 1;
     if (print_color_blocks(line++, 0) != 0) return 1;
