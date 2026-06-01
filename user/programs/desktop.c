@@ -891,8 +891,35 @@ static void draw_desktop_background_region(user_gui_surface_t* surface, int clip
     }
 }
 
+static void format_clock_text_from_seconds(char* dst, size_t dst_size, uint32_t day_seconds);
+
 static void format_clock_text(char* dst, size_t dst_size) {
     rtc_local_time_t now;
+    uint32_t day_seconds;
+
+    if (!dst || dst_size < 9U) return;
+    if (user_get_local_time(&now) != 0) {
+        copy_text(dst, dst_size, "--:--:--");
+        return;
+    }
+    day_seconds = (uint32_t)now.hour * 3600U + (uint32_t)now.minute * 60U + (uint32_t)now.second;
+    format_clock_text_from_seconds(dst, dst_size, day_seconds);
+}
+
+static int read_clock_day_seconds(uint32_t* out_seconds) {
+    rtc_local_time_t now;
+
+    if (!out_seconds) return -1;
+    if (user_get_local_time(&now) != 0) return -1;
+    *out_seconds = (uint32_t)now.hour * 3600U + (uint32_t)now.minute * 60U + (uint32_t)now.second;
+    return 0;
+}
+
+static void format_clock_text_from_seconds(char* dst, size_t dst_size, uint32_t day_seconds) {
+    uint32_t seconds = day_seconds % 86400U;
+    uint32_t hour = seconds / 3600U;
+    uint32_t minute = (seconds / 60U) % 60U;
+    uint32_t second = seconds % 60U;
     int hour_tens;
     int hour_ones;
     int minute_tens;
@@ -901,16 +928,12 @@ static void format_clock_text(char* dst, size_t dst_size) {
     int second_ones;
 
     if (!dst || dst_size < 9U) return;
-    if (user_get_local_time(&now) != 0) {
-        copy_text(dst, dst_size, "--:--:--");
-        return;
-    }
-    hour_tens = (int)(now.hour / 10U);
-    hour_ones = (int)(now.hour % 10U);
-    minute_tens = (int)(now.minute / 10U);
-    minute_ones = (int)(now.minute % 10U);
-    second_tens = (int)(now.second / 10U);
-    second_ones = (int)(now.second % 10U);
+    hour_tens = (int)(hour / 10U);
+    hour_ones = (int)(hour % 10U);
+    minute_tens = (int)(minute / 10U);
+    minute_ones = (int)(minute % 10U);
+    second_tens = (int)(second / 10U);
+    second_ones = (int)(second % 10U);
     dst[0] = (char)('0' + hour_tens);
     dst[1] = (char)('0' + hour_ones);
     dst[2] = ':';
@@ -920,6 +943,13 @@ static void format_clock_text(char* dst, size_t dst_size) {
     dst[6] = (char)('0' + second_tens);
     dst[7] = (char)('0' + second_ones);
     dst[8] = '\0';
+}
+
+static void format_clock_text_from_base(char* dst, size_t dst_size,
+                                        uint32_t base_seconds, uint32_t base_tick, uint32_t now_tick) {
+    uint32_t elapsed_seconds = (now_tick - base_tick) / 100U;
+
+    format_clock_text_from_seconds(dst, dst_size, base_seconds + elapsed_seconds);
 }
 
 static int clock_text_equal(const char* a, const char* b) {
@@ -1992,10 +2022,10 @@ static void render_frame(uint32_t* framebuffer, int pitch_pixels, int width, int
                          int menu_visible, int hovered_item, int hovered_task_slot,
                          int context_visible, int context_x, int context_y, int hovered_context_item,
                          int drag_window_id, int resize_window_id, int hovered_desktop_icon,
-                         const char* status_text, const window_surface_cache_t* surface_caches, int surface_cache_count,
+                         const char* status_text, const char* clock_text,
+                         const window_surface_cache_t* surface_caches, int surface_cache_count,
                          const gui_window_snapshot_entry_t* windows, int window_count) {
     user_gui_surface_t surface;
-    char clock_text[12];
     const desktop_icon_entry_t* desktop_icons = 0;
     int desktop_icon_count;
 
@@ -2046,11 +2076,11 @@ static void render_frame(uint32_t* framebuffer, int pitch_pixels, int width, int
     }
     if (rects_intersect(dirty_x, dirty_y, dirty_w, dirty_h,
                         width - CLOCK_BOX_W - 12, START_BUTTON_Y, CLOCK_BOX_W, CLOCK_BOX_H)) {
-        format_clock_text(clock_text, sizeof(clock_text));
         draw_xfce_button_clipped(&surface, width - CLOCK_BOX_W - 12, START_BUTTON_Y, CLOCK_BOX_W, CLOCK_BOX_H, 3,
                                  0x4C5661, UI_TASKBAR_PANEL, 0x20262D, 0,
                                  dirty_x, dirty_y, dirty_w, dirty_h);
-        draw_string_clipped(&surface, width - CLOCK_BOX_W - 12 + 14, START_BUTTON_Y + 8, clock_text, UI_TEXT,
+        draw_string_clipped(&surface, width - CLOCK_BOX_W - 12 + 14, START_BUTTON_Y + 8,
+                            clock_text ? clock_text : "--:--:--", UI_TEXT,
                             dirty_x, dirty_y, dirty_w, dirty_h);
     }
     if (status_text && status_text[0] != '\0' &&
@@ -2189,6 +2219,10 @@ int main(void) {
     char status_text[96];
     char pending_open_path[256];
     char displayed_clock_text[12];
+    uint32_t clock_base_seconds = 0;
+    uint32_t clock_base_tick = 0;
+    uint32_t clock_last_sync_tick = 0;
+    int clock_has_base = 0;
     uint32_t* framebuffer;
     uint32_t framebuffer_pixels;
     uint32_t last_surface_sync_tick = 0;
@@ -2272,11 +2306,20 @@ int main(void) {
                                surface_cache_flags, 1);
     surface_cache_dirty = 0;
     last_surface_sync_tick = user_uptime_ticks();
-    format_clock_text(displayed_clock_text, sizeof(displayed_clock_text));
+    clock_base_tick = last_surface_sync_tick;
+    clock_last_sync_tick = last_surface_sync_tick;
+    if (read_clock_day_seconds(&clock_base_seconds) == 0) {
+        clock_has_base = 1;
+        format_clock_text_from_base(displayed_clock_text, sizeof(displayed_clock_text),
+                                    clock_base_seconds, clock_base_tick, last_surface_sync_tick);
+    } else {
+        format_clock_text(displayed_clock_text, sizeof(displayed_clock_text));
+    }
     render_frame(framebuffer, width, width, height, 0, 0, width, height, focused, mouse_x, mouse_y, click_count,
                  menu_visible, hovered_item, hovered_task_slot,
                  context_visible, context_x, context_y, hovered_context_item,
-                 drag_window_id, resize_window_id, hovered_desktop_icon, status_text, surface_caches, TASK_SLOT_MAX,
+                 drag_window_id, resize_window_id, hovered_desktop_icon, status_text, displayed_clock_text,
+                 surface_caches, TASK_SLOT_MAX,
                  window_entries, tracked_window_count);
     present.size = sizeof(present);
     present.flags = 0U;
@@ -2299,9 +2342,26 @@ int main(void) {
         int processed_events = 0;
         int clock_dirty = 0;
         char pending_clock_text[12];
+        uint32_t loop_tick = user_uptime_ticks();
 
         dirty_valid = 0;
-        format_clock_text(pending_clock_text, sizeof(pending_clock_text));
+        if (clock_has_base) {
+            if (loop_tick - clock_last_sync_tick >= 6000U &&
+                read_clock_day_seconds(&clock_base_seconds) == 0) {
+                clock_base_tick = loop_tick;
+                clock_last_sync_tick = loop_tick;
+            }
+            format_clock_text_from_base(pending_clock_text, sizeof(pending_clock_text),
+                                        clock_base_seconds, clock_base_tick, loop_tick);
+        } else if (read_clock_day_seconds(&clock_base_seconds) == 0) {
+            clock_has_base = 1;
+            clock_base_tick = loop_tick;
+            clock_last_sync_tick = loop_tick;
+            format_clock_text_from_base(pending_clock_text, sizeof(pending_clock_text),
+                                        clock_base_seconds, clock_base_tick, loop_tick);
+        } else {
+            format_clock_text(pending_clock_text, sizeof(pending_clock_text));
+        }
         if (!clock_text_equal(displayed_clock_text, pending_clock_text)) {
             clock_dirty = 1;
             redraw = 1;
@@ -2321,7 +2381,7 @@ int main(void) {
                 if (status == 0) {
                     if (processed_events == 0) {
                         if (redraw) break;
-                        user_yield();
+                        (void)user_sleep(1);
                         goto desktop_loop_continue;
                     }
                     break;
@@ -2484,7 +2544,7 @@ int main(void) {
                         needs_visual_redraw = 1;
                     }
                     if (dispatched_to_app) yield_after_dispatch = 1;
-                    redraw = needs_visual_redraw;
+                    if (needs_visual_redraw) redraw = 1;
                     if (needs_visual_redraw) {
                         if (drag_window_id >= 0 || resize_window_id >= 0 || dispatched_to_app) {
                             mark_dirty_full(&dirty_valid, &dirty_x, &dirty_y, &dirty_w, &dirty_h, width, height);
@@ -2966,7 +3026,9 @@ int main(void) {
                          focused, mouse_x, mouse_y, click_count,
                          menu_visible, hovered_item, hovered_task_slot,
                          context_visible, context_x, context_y, hovered_context_item,
-                         drag_window_id, resize_window_id, hovered_desktop_icon, status_text, surface_caches, TASK_SLOT_MAX,
+                         drag_window_id, resize_window_id, hovered_desktop_icon, status_text,
+                         clock_dirty ? pending_clock_text : displayed_clock_text,
+                         surface_caches, TASK_SLOT_MAX,
                          window_entries, tracked_window_count);
             present.x = dirty_x;
             present.y = dirty_y;

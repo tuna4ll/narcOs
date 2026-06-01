@@ -2476,7 +2476,9 @@ static void graphics_process_main(void) {
         if (timer_ticks - last_clock_tick >= 100U) {
             read_rtc();
             last_clock_tick = timer_ticks;
-            if (!nwm_desktop_surface_active_state()) {
+            if (nwm_desktop_surface_active_state()) {
+                nwm_queue_desktop_event(GUI_WIN_EVT_PAINT, 0, 0, 0);
+            } else {
                 gui_mark_dirty_full();
                 gui_needs_redraw = 1;
             }
