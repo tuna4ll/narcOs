@@ -61,6 +61,11 @@
 #define SETTINGS_BUTTON_W 96
 #define TASKBAR_NET_W 92
 
+#define TASKBAR_HOVER_NONE 0
+#define TASKBAR_HOVER_START 1
+#define TASKBAR_HOVER_TERMINAL 2
+#define TASKBAR_HOVER_SETTINGS 3
+
 #if defined(__x86_64__)
 #define DESKTOP_BG_W 224
 #define DESKTOP_BG_H 126
@@ -963,10 +968,10 @@ static int clock_text_equal(const char* a, const char* b) {
 
 static void draw_desktop_icon(user_gui_surface_t* surface, int kind, int x, int y, const char* label,
                               uint32_t accent, int hovered) {
-    int card_x = x + 4;
-    int card_y = y + 2;
-    int card_w = DESKTOP_ICON_CARD_W - 8;
-    int card_h = 66;
+    int card_x = x + 6;
+    int card_y = y + 4;
+    int card_w = DESKTOP_ICON_CARD_W - 12;
+    int card_h = DESKTOP_ICON_CARD_H - 12;
     int glyph_box_x;
     int glyph_box_y = y + 10;
     int glyph_x;
@@ -975,32 +980,38 @@ static void draw_desktop_icon(user_gui_surface_t* surface, int kind, int x, int 
     int label_x;
     int label_chip_w;
     int label_chip_x;
-    uint32_t hover_blue = 0x4F8CC9;
-    uint32_t card_top = mix_color(hover_blue, 0x15202A, 86);
-    uint32_t card_bottom = mix_color(0x16212C, hover_blue, 38);
+    uint32_t hover = 0x5B8FBF;
 
     if (!surface) return;
     {
-        uint32_t glyph_top = hovered ? mix_color(hover_blue, UI_SURFACE_2, 96) : 0x1A2530;
-        uint32_t glyph_bottom = hovered ? mix_color(UI_SURFACE_2, hover_blue, 62) : 0x111A22;
-        uint32_t label_fill = hovered ? mix_color(hover_blue, UI_SURFACE_2, 52) : 0x0F171F;
-        uint32_t label_border = hovered ? mix_color(0xFFFFFF, hover_blue, 74) : 0x33404D;
+        uint32_t glyph_top = hovered ? mix_color(hover, 0x182330, 42) : 0x1A2530;
+        uint32_t glyph_bottom = hovered ? mix_color(hover, 0x101820, 24) : 0x111A22;
+        uint32_t label_fill = hovered ? mix_color(hover, 0x111A22, 34) : 0x0F171F;
+        uint32_t label_border = hovered ? mix_color(hover, 0x465260, 96) : 0x33404D;
         uint32_t label_text = hovered ? UI_TEXT : UI_TEXT_MUTED;
-        uint32_t frame_border = mix_color(0xFFFFFF, hover_blue, 80);
 
         if (hovered) {
-            draw_panel_elevated(surface, card_x, card_y, card_w, card_h, UI_RADIUS_LG,
-                                card_top, card_bottom, frame_border, hover_blue);
-            user_gui_fill_rect_alpha(surface, card_x + 12, card_y + 8, card_w - 24, 2, 0xFFFFFF, 84);
-            user_gui_fill_rect_alpha(surface, card_x + 12, card_y + card_h - 12, card_w - 24, 1, hover_blue, 74);
+            user_gui_draw_rounded_rect(surface, card_x + 1, card_y + 2, card_w, card_h, UI_RADIUS_MD,
+                                       UI_SHADOW, 52);
+            user_gui_draw_rounded_rect(surface, card_x, card_y, card_w, card_h, UI_RADIUS_MD,
+                                       mix_color(hover, 0x2B3540, 88), 210);
+            fill_vertical_gradient_rounded(surface, card_x + 1, card_y + 1, card_w - 2, card_h - 2,
+                                           UI_RADIUS_SM,
+                                           mix_color(hover, 0x15202A, 36),
+                                           mix_color(hover, 0x0E151C, 18));
+            user_gui_fill_rect_alpha(surface, card_x + 10, card_y + 1, card_w - 20, 1, UI_HILITE_SOFT, 56);
         }
 
         glyph_box_x = x + (DESKTOP_ICON_CARD_W - DESKTOP_ICON_GLYPH_BOX) / 2;
         if (hovered) {
-            draw_panel_elevated(surface, glyph_box_x, glyph_box_y,
-                                DESKTOP_ICON_GLYPH_BOX, DESKTOP_ICON_GLYPH_BOX, UI_RADIUS_MD,
-                                glyph_top, glyph_bottom, mix_color(0xFFFFFF, hover_blue, 90), hover_blue);
-            user_gui_fill_rect_alpha(surface, glyph_box_x + 8, glyph_box_y + 7, DESKTOP_ICON_GLYPH_BOX - 16, 2, 0xFFFFFF, 96);
+            user_gui_draw_rounded_rect(surface, glyph_box_x, glyph_box_y,
+                                       DESKTOP_ICON_GLYPH_BOX, DESKTOP_ICON_GLYPH_BOX, UI_RADIUS_MD,
+                                       mix_color(hover, 0x394653, 98), 210);
+            fill_vertical_gradient_rounded(surface, glyph_box_x + 1, glyph_box_y + 1,
+                                           DESKTOP_ICON_GLYPH_BOX - 2, DESKTOP_ICON_GLYPH_BOX - 2,
+                                           UI_RADIUS_SM, glyph_top, glyph_bottom);
+            user_gui_fill_rect_alpha(surface, glyph_box_x + 8, glyph_box_y + 7,
+                                     DESKTOP_ICON_GLYPH_BOX - 16, 1, UI_HILITE_SOFT, 62);
         } else {
             user_gui_draw_rounded_rect(surface, glyph_box_x, glyph_box_y,
                                        DESKTOP_ICON_GLYPH_BOX, DESKTOP_ICON_GLYPH_BOX, UI_RADIUS_MD,
@@ -1010,7 +1021,6 @@ static void draw_desktop_icon(user_gui_surface_t* surface, int kind, int x, int 
         }
         glyph_x = glyph_box_x + (DESKTOP_ICON_GLYPH_BOX - DESKTOP_ICON_GLYPH_SIZE) / 2;
         glyph_y = glyph_box_y + (DESKTOP_ICON_GLYPH_BOX - DESKTOP_ICON_GLYPH_SIZE) / 2;
-        if (hovered) glyph_y -= 1;
         {
             const uint8_t* bitmap_icon = desktop_bitmap_icon_for_kind(kind);
 
@@ -1031,9 +1041,11 @@ static void draw_desktop_icon(user_gui_surface_t* surface, int kind, int x, int 
         if (label_chip_w > DESKTOP_ICON_CARD_W - 8) label_chip_w = DESKTOP_ICON_CARD_W - 8;
         label_chip_x = x + (DESKTOP_ICON_CARD_W - label_chip_w) / 2;
         if (hovered) {
-            draw_panel_elevated(surface, label_chip_x, y + DESKTOP_ICON_LABEL_Y, label_chip_w, 24, UI_RADIUS_SM,
-                                mix_color(label_fill, 0x17222D, 120),
-                                label_fill, label_border, hover_blue);
+            user_gui_draw_rounded_rect(surface, label_chip_x, y + DESKTOP_ICON_LABEL_Y, label_chip_w, 24,
+                                       UI_RADIUS_SM, label_border, 220);
+            fill_vertical_gradient_rounded(surface, label_chip_x + 1, y + DESKTOP_ICON_LABEL_Y + 1,
+                                           label_chip_w - 2, 22, UI_RADIUS_SM,
+                                           mix_color(label_fill, 0x1A2632, 82), label_fill);
         }
         label_x = label_chip_x + (label_chip_w - label_len * 8) / 2;
         if (label_x < label_chip_x + 9) label_x = label_chip_x + 9;
@@ -1269,7 +1281,7 @@ static void activate_desktop_icon(const desktop_icon_entry_t* icon, char* status
 }
 
 static void draw_taskbar_legacy(user_gui_surface_t* surface, int width, const gui_window_snapshot_entry_t* windows,
-                                int window_count, int hovered_task_slot, int menu_visible,
+                                int window_count, int hovered_task_slot, int hovered_taskbar_button, int menu_visible,
                                 int clip_x, int clip_y, int clip_w, int clip_h) {
     int bar_y;
     int app_x;
@@ -1294,9 +1306,12 @@ static void draw_taskbar_legacy(user_gui_surface_t* surface, int width, const gu
     user_gui_fill_rect_alpha(surface, clip_x, TASKBAR_HEIGHT - 1, clip_w, 1, UI_TASKBAR_EDGE, 230);
     user_gui_fill_rect_alpha(surface, clip_x, 0, clip_w, 1, UI_HILITE_SOFT, 42);
     draw_xfce_button_clipped(surface, START_BUTTON_X, bar_y, START_BUTTON_W, START_BUTTON_H, 3,
-                             menu_visible ? 0xE5EDF4 : UI_TASKBAR_PANEL_ALT,
-                             menu_visible ? UI_ACCENT_ALT : UI_TASKBAR_PANEL,
-                             menu_visible ? UI_ACCENT_ALT : 0x20262D,
+                             menu_visible ? 0xE5EDF4 :
+                             hovered_taskbar_button == TASKBAR_HOVER_START ? mix_color(UI_ACCENT_ALT, UI_TASKBAR_PANEL_ALT, 48) : UI_TASKBAR_PANEL_ALT,
+                             menu_visible ? UI_ACCENT_ALT :
+                             hovered_taskbar_button == TASKBAR_HOVER_START ? mix_color(UI_ACCENT_ALT, UI_TASKBAR_PANEL, 28) : UI_TASKBAR_PANEL,
+                             menu_visible ? UI_ACCENT_ALT :
+                             hovered_taskbar_button == TASKBAR_HOVER_START ? mix_color(UI_ACCENT_ALT, 0x20262D, 96) : 0x20262D,
                              menu_visible, clip_x, clip_y, clip_w, clip_h);
     if (rects_intersect(clip_x, clip_y, clip_w, clip_h, START_BUTTON_X, bar_y, START_BUTTON_W, START_BUTTON_H)) {
         user_gui_draw_icon(surface, USER_GUI_ICON_NARCOS, START_BUTTON_X + 11, bar_y + 4, 17,
@@ -1307,7 +1322,9 @@ static void draw_taskbar_legacy(user_gui_surface_t* surface, int width, const gu
                                  menu_visible ? UI_TEXT_DARK : UI_ACCENT_ALT, 180);
     }
     draw_xfce_button_clipped(surface, app_x, bar_y, APP_BUTTON_W, START_BUTTON_H, 3,
-                             0x4C5661, UI_TASKBAR_PANEL, 0x20262D, 0,
+                             hovered_taskbar_button == TASKBAR_HOVER_TERMINAL ? mix_color(UI_ACCENT_ALT, 0x4C5661, 40) : 0x4C5661,
+                             hovered_taskbar_button == TASKBAR_HOVER_TERMINAL ? mix_color(UI_ACCENT_ALT, UI_TASKBAR_PANEL, 24) : UI_TASKBAR_PANEL,
+                             hovered_taskbar_button == TASKBAR_HOVER_TERMINAL ? mix_color(UI_ACCENT_ALT, 0x20262D, 94) : 0x20262D, 0,
                              clip_x, clip_y, clip_w, clip_h);
     if (rects_intersect(clip_x, clip_y, clip_w, clip_h, app_x, bar_y, APP_BUTTON_W, START_BUTTON_H)) {
         user_gui_draw_icon(surface, USER_GUI_ICON_TERMINAL, app_x + 10, bar_y + 4, 17, UI_ACCENT_ALT, 0);
@@ -1366,7 +1383,9 @@ static void draw_taskbar_legacy(user_gui_surface_t* surface, int width, const gu
     }
 
     draw_xfce_button_clipped(surface, settings_x, bar_y, SETTINGS_BUTTON_W, START_BUTTON_H, 3,
-                             0x4C5661, UI_TASKBAR_PANEL, 0x20262D, 0,
+                             hovered_taskbar_button == TASKBAR_HOVER_SETTINGS ? mix_color(UI_ACCENT_ALT, 0x4C5661, 40) : 0x4C5661,
+                             hovered_taskbar_button == TASKBAR_HOVER_SETTINGS ? mix_color(UI_ACCENT_ALT, UI_TASKBAR_PANEL, 24) : UI_TASKBAR_PANEL,
+                             hovered_taskbar_button == TASKBAR_HOVER_SETTINGS ? mix_color(UI_ACCENT_ALT, 0x20262D, 94) : 0x20262D, 0,
                              clip_x, clip_y, clip_w, clip_h);
     if (rects_intersect(clip_x, clip_y, clip_w, clip_h, settings_x, bar_y, SETTINGS_BUTTON_W, START_BUTTON_H)) {
         user_gui_draw_rgba_bitmap_scaled(surface, desktop_settings_icon_rgba(),
@@ -2019,7 +2038,7 @@ static int forward_pointer_event(const gui_window_snapshot_entry_t* win, uint32_
 static void render_frame(uint32_t* framebuffer, int pitch_pixels, int width, int height,
                          int dirty_x, int dirty_y, int dirty_w, int dirty_h,
                          int focused, int mouse_x, int mouse_y, int click_count,
-                         int menu_visible, int hovered_item, int hovered_task_slot,
+                         int menu_visible, int hovered_item, int hovered_task_slot, int hovered_taskbar_button,
                          int context_visible, int context_x, int context_y, int hovered_context_item,
                          int drag_window_id, int resize_window_id, int hovered_desktop_icon,
                          const char* status_text, const char* clock_text,
@@ -2071,7 +2090,7 @@ static void render_frame(uint32_t* framebuffer, int pitch_pixels, int width, int
                                  dirty_x, dirty_y, dirty_w, dirty_h);
     }
     if (rects_intersect(dirty_x, dirty_y, dirty_w, dirty_h, 0, 0, width, TASKBAR_HEIGHT + 6)) {
-        draw_taskbar_legacy(&surface, width, windows, window_count, hovered_task_slot, menu_visible,
+        draw_taskbar_legacy(&surface, width, windows, window_count, hovered_task_slot, hovered_taskbar_button, menu_visible,
                             dirty_x, dirty_y, dirty_w, dirty_h);
     }
     if (rects_intersect(dirty_x, dirty_y, dirty_w, dirty_h,
@@ -2116,14 +2135,14 @@ static void render_frame(uint32_t* framebuffer, int pitch_pixels, int width, int
                             dirty_x, dirty_y, dirty_w, dirty_h);
         for (int i = 0; i < MENU_ITEMS; i++) {
             int item_y = start_menu_item_y(i);
-            uint32_t fill_top = i == hovered_item ? mix_color(UI_ACCENT_ALT, UI_SURFACE_2, 120) : 0x16202A;
-            uint32_t fill_bottom = i == hovered_item ? UI_ACCENT : 0x10161D;
-            uint32_t border = i == hovered_item ? UI_ACCENT_ALT : UI_BORDER_SOFT;
-            uint32_t title = i == hovered_item ? UI_TEXT_DARK : UI_TEXT;
-            uint32_t subtitle = i == hovered_item ? UI_TEXT_DARK : UI_TEXT_MUTED;
+            uint32_t fill_top = i == hovered_item ? mix_color(UI_ACCENT_ALT, 0x16202A, 42) : 0x16202A;
+            uint32_t fill_bottom = i == hovered_item ? mix_color(UI_ACCENT_ALT, 0x10161D, 24) : 0x10161D;
+            uint32_t border = i == hovered_item ? mix_color(UI_ACCENT_ALT, UI_BORDER_SOFT, 112) : UI_BORDER_SOFT;
+            uint32_t title = i == hovered_item ? UI_TEXT : UI_TEXT;
+            uint32_t subtitle = i == hovered_item ? UI_TEXT : UI_TEXT_MUTED;
 
             draw_panel_elevated_clipped(&surface, MENU_X + 10, item_y, MENU_W - 20, MENU_ITEM_H - 6, UI_RADIUS_SM,
-                                        fill_top, fill_bottom, border, i == hovered_item ? UI_ACCENT_ALT : 0U,
+                                        fill_top, fill_bottom, border, i == hovered_item ? mix_color(UI_ACCENT_ALT, UI_SURFACE_2, 90) : 0U,
                                         dirty_x, dirty_y, dirty_w, dirty_h);
             {
                 const uint8_t* bitmap_icon = desktop_bitmap_icon_for_user_gui_icon(menu_item_icons[i]);
@@ -2134,7 +2153,7 @@ static void render_frame(uint32_t* framebuffer, int pitch_pixels, int width, int
                                                      MENU_X + 18, item_y + 5, 22);
                 } else {
                     user_gui_draw_icon(&surface, menu_item_icons[i], MENU_X + 18, item_y + 5, 22,
-                                       i == hovered_item ? UI_TEXT_DARK : UI_ACCENT_ALT, i == hovered_item);
+                                       i == hovered_item ? UI_TEXT : UI_ACCENT_ALT, i == hovered_item);
                 }
             }
             draw_tall_string_clipped(&surface, MENU_X + 48, item_y + 4, menu_items[i].label, title, UI_SHADOW,
@@ -2154,14 +2173,14 @@ static void render_frame(uint32_t* framebuffer, int pitch_pixels, int width, int
                                     dirty_x, dirty_y, dirty_w, dirty_h);
         for (int i = 0; i < CTX_MENU_ITEMS; i++) {
             int item_y = context_y + 8 + i * CTX_MENU_ITEM_H;
-            uint32_t fill_top = i == hovered_context_item ? mix_color(UI_ACCENT_ALT, UI_SURFACE_2, 120) : 0x16202A;
-            uint32_t fill_bottom = i == hovered_context_item ? UI_ACCENT : 0x10161D;
-            uint32_t border = i == hovered_context_item ? UI_ACCENT_ALT : UI_BORDER_SOFT;
-            uint32_t text = i == hovered_context_item ? UI_TEXT_DARK : UI_TEXT;
+            uint32_t fill_top = i == hovered_context_item ? mix_color(UI_ACCENT_ALT, 0x16202A, 42) : 0x16202A;
+            uint32_t fill_bottom = i == hovered_context_item ? mix_color(UI_ACCENT_ALT, 0x10161D, 24) : 0x10161D;
+            uint32_t border = i == hovered_context_item ? mix_color(UI_ACCENT_ALT, UI_BORDER_SOFT, 112) : UI_BORDER_SOFT;
+            uint32_t text = i == hovered_context_item ? UI_TEXT : UI_TEXT;
 
             draw_panel_elevated_clipped(&surface, context_x + 8, item_y, CTX_MENU_W - 16, CTX_MENU_ITEM_H - 4,
                                         UI_RADIUS_SM, fill_top, fill_bottom, border,
-                                        i == hovered_context_item ? UI_ACCENT_ALT : 0U,
+                                        i == hovered_context_item ? mix_color(UI_ACCENT_ALT, UI_SURFACE_2, 90) : 0U,
                                         dirty_x, dirty_y, dirty_w, dirty_h);
             draw_string_clipped(&surface, context_x + 18, item_y + 7, context_menu_items[i], text,
                                 dirty_x, dirty_y, dirty_w, dirty_h);
@@ -2189,6 +2208,7 @@ int main(void) {
     int menu_visible = 0;
     int hovered_item = -1;
     int hovered_task_slot = -1;
+    int hovered_taskbar_button = TASKBAR_HOVER_NONE;
     int context_visible = 0;
     int context_x = 0;
     int context_y = 0;
@@ -2316,7 +2336,7 @@ int main(void) {
         format_clock_text(displayed_clock_text, sizeof(displayed_clock_text));
     }
     render_frame(framebuffer, width, width, height, 0, 0, width, height, focused, mouse_x, mouse_y, click_count,
-                 menu_visible, hovered_item, hovered_task_slot,
+                 menu_visible, hovered_item, hovered_task_slot, hovered_taskbar_button,
                  context_visible, context_x, context_y, hovered_context_item,
                  drag_window_id, resize_window_id, hovered_desktop_icon, status_text, displayed_clock_text,
                  surface_caches, TASK_SLOT_MAX,
@@ -2445,6 +2465,7 @@ int main(void) {
                     int hit_idx;
                     int prev_hovered_item = hovered_item;
                     int prev_hovered_task_slot = hovered_task_slot;
+                    int prev_hovered_taskbar_button = hovered_taskbar_button;
                     int prev_hovered_context_item = hovered_context_item;
                     int prev_hovered_desktop_icon = hovered_desktop_icon;
                     int needs_visual_redraw = 0;
@@ -2455,6 +2476,23 @@ int main(void) {
                     mouse_x = event.arg0;
                     mouse_y = event.arg1;
                     hovered_task_slot = find_task_slot(window_entries, tracked_window_count, width, mouse_x, mouse_y);
+                    hovered_taskbar_button = TASKBAR_HOVER_NONE;
+                    if (point_in_rect(mouse_x, mouse_y, START_BUTTON_X, START_BUTTON_Y, START_BUTTON_W, START_BUTTON_H)) {
+                        hovered_taskbar_button = TASKBAR_HOVER_START;
+                    } else if (point_in_rect(mouse_x, mouse_y,
+                                             START_BUTTON_X + START_BUTTON_W + 10, START_BUTTON_Y,
+                                             APP_BUTTON_W, START_BUTTON_H)) {
+                        hovered_taskbar_button = TASKBAR_HOVER_TERMINAL;
+                    } else {
+                        int clock_x = width - CLOCK_BOX_W - 12;
+                        int net_x = clock_x - TASKBAR_NET_W - 8;
+                        int settings_x = net_x - SETTINGS_BUTTON_W - 8;
+
+                        if (point_in_rect(mouse_x, mouse_y, settings_x, START_BUTTON_Y,
+                                          SETTINGS_BUTTON_W, START_BUTTON_H)) {
+                            hovered_taskbar_button = TASKBAR_HOVER_SETTINGS;
+                        }
+                    }
                     desktop_icons = desktop_icon_cache_get(width, height, &desktop_icon_count);
                     hovered_desktop_icon = hit_test_desktop_icon(desktop_icons, desktop_icon_count, mouse_x, mouse_y);
                     if (menu_visible) {
@@ -2539,6 +2577,7 @@ int main(void) {
                     }
                     if (hovered_item != prev_hovered_item ||
                         hovered_task_slot != prev_hovered_task_slot ||
+                        hovered_taskbar_button != prev_hovered_taskbar_button ||
                         hovered_context_item != prev_hovered_context_item ||
                         hovered_desktop_icon != prev_hovered_desktop_icon) {
                         needs_visual_redraw = 1;
@@ -2549,7 +2588,8 @@ int main(void) {
                         if (drag_window_id >= 0 || resize_window_id >= 0 || dispatched_to_app) {
                             mark_dirty_full(&dirty_valid, &dirty_x, &dirty_y, &dirty_w, &dirty_h, width, height);
                         } else {
-                            if (hovered_task_slot != prev_hovered_task_slot) {
+                            if (hovered_task_slot != prev_hovered_task_slot ||
+                                hovered_taskbar_button != prev_hovered_taskbar_button) {
                                 mark_taskbar_dirty(&dirty_valid, &dirty_x, &dirty_y, &dirty_w, &dirty_h, width, height);
                             }
                             if (menu_visible || hovered_item != prev_hovered_item) {
@@ -3024,7 +3064,7 @@ int main(void) {
             }
             render_frame(framebuffer, width, width, height, dirty_x, dirty_y, dirty_w, dirty_h,
                          focused, mouse_x, mouse_y, click_count,
-                         menu_visible, hovered_item, hovered_task_slot,
+                         menu_visible, hovered_item, hovered_task_slot, hovered_taskbar_button,
                          context_visible, context_x, context_y, hovered_context_item,
                          drag_window_id, resize_window_id, hovered_desktop_icon, status_text,
                          clock_dirty ? pending_clock_text : displayed_clock_text,
