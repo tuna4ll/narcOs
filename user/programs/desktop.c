@@ -17,10 +17,10 @@
 #define TASK_SLOT_MAX 8
 #define MENU_X 10
 #define MENU_Y (TASKBAR_HEIGHT + UI_SPACE_3)
-#define MENU_W 260
-#define MENU_ITEM_H UI_MENU_ITEM_H
+#define MENU_W 348
+#define MENU_ITEM_H 42
 #define MENU_ITEMS 7
-#define MENU_HEADER_H UI_MENU_HEADER_H
+#define MENU_HEADER_H 52
 #define MENU_SECTION_H UI_MENU_SECTION_H
 #define MENU_PRIMARY_ITEMS 5
 #define CTX_MENU_W 196
@@ -195,6 +195,7 @@ static void draw_string_clipped(user_gui_surface_t* surface, int x, int y, const
 static void draw_tall_string_clipped(user_gui_surface_t* surface, int x, int y, const char* text,
                                      uint32_t color, uint32_t shadow,
                                      int clip_x, int clip_y, int clip_w, int clip_h);
+static void copy_text_ellipsized(char* dst, size_t dst_size, const char* src, int max_px);
 static void copy_icon_label(char* dst, size_t dst_size, const char* src);
 static void desktop_icon_rect(int slot, int screen_w, int screen_h, int* out_x, int* out_y);
 static void desktop_icon_cache_invalidate(void);
@@ -497,6 +498,12 @@ static const uint8_t* desktop_bitmap_icon_for_kind(int kind) {
 
 static const uint8_t* desktop_bitmap_icon_for_user_gui_icon(int icon) {
     switch (icon) {
+        case USER_GUI_ICON_EXPLORER:
+        case USER_GUI_ICON_FOLDER:
+            return desktop_folder_icon_rgba();
+        case USER_GUI_ICON_NARCPAD:
+        case USER_GUI_ICON_FILE:
+            return desktop_text_icon_rgba();
         case USER_GUI_ICON_SETTINGS: return desktop_settings_icon_rgba();
         case USER_GUI_ICON_SNAKE: return desktop_snake_icon_rgba();
         case USER_GUI_ICON_DOOM: return desktop_doom_icon_rgba();
@@ -688,6 +695,40 @@ static int text_length(const char* src) {
     if (!src) return 0;
     while (src[len] != '\0') len++;
     return len;
+}
+
+static void copy_text_ellipsized(char* dst, size_t dst_size, const char* src, int max_px) {
+    int max_chars;
+    int src_len;
+    int i;
+
+    if (!dst || dst_size == 0U) return;
+    if (!src) src = "";
+    if (max_px <= 0) {
+        dst[0] = '\0';
+        return;
+    }
+    max_chars = max_px / 8;
+    if (max_chars < 1) {
+        dst[0] = '\0';
+        return;
+    }
+    if (max_chars > (int)dst_size - 1) max_chars = (int)dst_size - 1;
+    src_len = text_length(src);
+    if (src_len <= max_chars) {
+        copy_text(dst, dst_size, src);
+        return;
+    }
+    if (max_chars <= 3) {
+        for (i = 0; i < max_chars && i + 1 < (int)dst_size; i++) dst[i] = '.';
+        dst[i] = '\0';
+        return;
+    }
+    for (i = 0; i < max_chars - 3 && i + 1 < (int)dst_size; i++) dst[i] = src[i];
+    dst[i++] = '.';
+    dst[i++] = '.';
+    dst[i++] = '.';
+    dst[i] = '\0';
 }
 
 static int start_menu_height(void) {
@@ -911,15 +952,6 @@ static void format_clock_text(char* dst, size_t dst_size) {
     format_clock_text_from_seconds(dst, dst_size, day_seconds);
 }
 
-static int read_clock_day_seconds(uint32_t* out_seconds) {
-    rtc_local_time_t now;
-
-    if (!out_seconds) return -1;
-    if (user_get_local_time(&now) != 0) return -1;
-    *out_seconds = (uint32_t)now.hour * 3600U + (uint32_t)now.minute * 60U + (uint32_t)now.second;
-    return 0;
-}
-
 static void format_clock_text_from_seconds(char* dst, size_t dst_size, uint32_t day_seconds) {
     uint32_t seconds = day_seconds % 86400U;
     uint32_t hour = seconds / 3600U;
@@ -948,13 +980,6 @@ static void format_clock_text_from_seconds(char* dst, size_t dst_size, uint32_t 
     dst[6] = (char)('0' + second_tens);
     dst[7] = (char)('0' + second_ones);
     dst[8] = '\0';
-}
-
-static void format_clock_text_from_base(char* dst, size_t dst_size,
-                                        uint32_t base_seconds, uint32_t base_tick, uint32_t now_tick) {
-    uint32_t elapsed_seconds = (now_tick - base_tick) / 100U;
-
-    format_clock_text_from_seconds(dst, dst_size, base_seconds + elapsed_seconds);
 }
 
 static int clock_text_equal(const char* a, const char* b) {
@@ -2114,51 +2139,68 @@ static void render_frame(uint32_t* framebuffer, int pitch_pixels, int width, int
     if (menu_visible &&
         rects_intersect(dirty_x, dirty_y, dirty_w, dirty_h, MENU_X, MENU_Y, MENU_W, start_menu_height())) {
         int menu_h = start_menu_height();
+        int content_x = MENU_X + 12;
+        int content_w = MENU_W - 24;
 
         draw_panel_elevated_clipped(&surface, MENU_X, MENU_Y, MENU_W, menu_h, UI_RADIUS_MD,
-                                    0x17212B, 0x111820, UI_BORDER_SOFT, UI_ACCENT_ALT,
+                                    0x1B2631, 0x111920, UI_BORDER_SOFT, UI_ACCENT_ALT,
                                     dirty_x, dirty_y, dirty_w, dirty_h);
         if (rects_intersect(dirty_x, dirty_y, dirty_w, dirty_h, MENU_X, MENU_Y, MENU_W, MENU_HEADER_H)) {
-            user_gui_draw_icon(&surface, USER_GUI_ICON_NARCOS, MENU_X + 16, MENU_Y + 11, 18, UI_ACCENT_ALT, 1);
+            user_gui_draw_rounded_rect(&surface, MENU_X + 14, MENU_Y + 10, 32, 32, UI_RADIUS_SM,
+                                       mix_color(UI_ACCENT_ALT, UI_SURFACE_0, 100), 235);
+            user_gui_draw_icon(&surface, USER_GUI_ICON_NARCOS, MENU_X + 21, MENU_Y + 17, 18, UI_ACCENT_ALT, 1);
+            user_gui_fill_rect_alpha(&surface, MENU_X + 58, MENU_Y + 13, MENU_W - 84, 1, UI_HILITE_SOFT, 24);
         }
-        draw_tall_string_clipped(&surface, MENU_X + 44, MENU_Y + 10, "NarcOS", UI_TEXT, UI_SHADOW,
-                                 dirty_x, dirty_y, dirty_w, dirty_h);
-        draw_string_clipped(&surface, MENU_X + MENU_W - 92, MENU_Y + 14, "Start Menu", UI_TEXT_SUBTLE,
+        draw_string_clipped(&surface, MENU_X + 58, MENU_Y + 16, "NarcOS", UI_TEXT,
                             dirty_x, dirty_y, dirty_w, dirty_h);
-        user_gui_fill_rect_alpha(&surface, MENU_X + 14, MENU_Y + MENU_HEADER_H - 2, MENU_W - 28, 1,
+        draw_string_clipped(&surface, MENU_X + 58, MENU_Y + 30, "Start Menu", UI_TEXT_SUBTLE,
+                            dirty_x, dirty_y, dirty_w, dirty_h);
+        user_gui_fill_rect_alpha(&surface, content_x, MENU_Y + MENU_HEADER_H - 2, content_w, 1,
                                  UI_BORDER_SOFT, 255);
-        draw_string_clipped(&surface, MENU_X + 18, MENU_Y + MENU_HEADER_H + 4, "Pinned",
+        draw_string_clipped(&surface, content_x + 6, MENU_Y + MENU_HEADER_H + 4, "Pinned",
                             UI_TEXT_SUBTLE, dirty_x, dirty_y, dirty_w, dirty_h);
-        draw_string_clipped(&surface, MENU_X + 18,
+        draw_string_clipped(&surface, content_x + 6,
                             start_menu_item_y(MENU_PRIMARY_ITEMS) - MENU_SECTION_H + 4,
                             "Tools", UI_TEXT_SUBTLE,
                             dirty_x, dirty_y, dirty_w, dirty_h);
         for (int i = 0; i < MENU_ITEMS; i++) {
             int item_y = start_menu_item_y(i);
-            uint32_t fill_top = i == hovered_item ? mix_color(UI_ACCENT_ALT, 0x16202A, 42) : 0x16202A;
-            uint32_t fill_bottom = i == hovered_item ? mix_color(UI_ACCENT_ALT, 0x10161D, 24) : 0x10161D;
+            int row_x = content_x;
+            int row_w = content_w;
+            int row_h = MENU_ITEM_H - 7;
+            int icon_x = row_x + 9;
+            int text_x = row_x + 48;
+            int text_w = row_w - 60;
+            char label_buf[40];
+            char subtitle_buf[64];
+            uint32_t fill_top = i == hovered_item ? mix_color(UI_ACCENT_ALT, 0x1B2732, 46) : 0x17212A;
+            uint32_t fill_bottom = i == hovered_item ? mix_color(UI_ACCENT_ALT, 0x10171E, 28) : 0x10171E;
             uint32_t border = i == hovered_item ? mix_color(UI_ACCENT_ALT, UI_BORDER_SOFT, 112) : UI_BORDER_SOFT;
-            uint32_t title = i == hovered_item ? UI_TEXT : UI_TEXT;
-            uint32_t subtitle = i == hovered_item ? UI_TEXT : UI_TEXT_MUTED;
+            uint32_t title = UI_TEXT;
+            uint32_t subtitle = i == hovered_item ? UI_TEXT_MUTED : UI_TEXT_SUBTLE;
 
-            draw_panel_elevated_clipped(&surface, MENU_X + 10, item_y, MENU_W - 20, MENU_ITEM_H - 6, UI_RADIUS_SM,
+            draw_panel_elevated_clipped(&surface, row_x, item_y, row_w, row_h, UI_RADIUS_SM,
                                         fill_top, fill_bottom, border, i == hovered_item ? mix_color(UI_ACCENT_ALT, UI_SURFACE_2, 90) : 0U,
                                         dirty_x, dirty_y, dirty_w, dirty_h);
+            user_gui_draw_rounded_rect(&surface, icon_x - 3, item_y + 5, 30, 30, UI_RADIUS_SM,
+                                       i == hovered_item ? mix_color(UI_ACCENT_ALT, UI_SURFACE_0, 78) : UI_SURFACE_0, 185);
             {
                 const uint8_t* bitmap_icon = desktop_bitmap_icon_for_user_gui_icon(menu_item_icons[i]);
 
                 if (bitmap_icon) {
                     user_gui_draw_rgba_bitmap_scaled(&surface, bitmap_icon,
                                                      DESKTOP_FOLDER_ICON_W, DESKTOP_FOLDER_ICON_H,
-                                                     MENU_X + 18, item_y + 5, 22);
+                                                     icon_x, item_y + 8, 24);
                 } else {
-                    user_gui_draw_icon(&surface, menu_item_icons[i], MENU_X + 18, item_y + 5, 22,
+                    user_gui_draw_icon(&surface, menu_item_icons[i], icon_x, item_y + 8, 24,
                                        i == hovered_item ? UI_TEXT : UI_ACCENT_ALT, i == hovered_item);
                 }
             }
-            draw_tall_string_clipped(&surface, MENU_X + 48, item_y + 4, menu_items[i].label, title, UI_SHADOW,
-                                     dirty_x, dirty_y, dirty_w, dirty_h);
-            draw_string_clipped(&surface, MENU_X + 48, item_y + 22, menu_items[i].subtitle, subtitle,
+            copy_text_ellipsized(label_buf, sizeof(label_buf), menu_items[i].label, text_w);
+            copy_text_ellipsized(subtitle_buf, sizeof(subtitle_buf), menu_items[i].subtitle, text_w);
+            draw_string_clipped(&surface, text_x, item_y + 8, label_buf, title,
+                                dirty_x, dirty_y, dirty_w, dirty_h);
+            draw_string_clipped(&surface, text_x, item_y + 22, subtitle_buf, subtitle,
                                 dirty_x, dirty_y, dirty_w, dirty_h);
         }
     }
@@ -2239,10 +2281,6 @@ int main(void) {
     char status_text[96];
     char pending_open_path[256];
     char displayed_clock_text[12];
-    uint32_t clock_base_seconds = 0;
-    uint32_t clock_base_tick = 0;
-    uint32_t clock_last_sync_tick = 0;
-    int clock_has_base = 0;
     uint32_t* framebuffer;
     uint32_t framebuffer_pixels;
     uint32_t last_surface_sync_tick = 0;
@@ -2326,15 +2364,7 @@ int main(void) {
                                surface_cache_flags, 1);
     surface_cache_dirty = 0;
     last_surface_sync_tick = user_uptime_ticks();
-    clock_base_tick = last_surface_sync_tick;
-    clock_last_sync_tick = last_surface_sync_tick;
-    if (read_clock_day_seconds(&clock_base_seconds) == 0) {
-        clock_has_base = 1;
-        format_clock_text_from_base(displayed_clock_text, sizeof(displayed_clock_text),
-                                    clock_base_seconds, clock_base_tick, last_surface_sync_tick);
-    } else {
-        format_clock_text(displayed_clock_text, sizeof(displayed_clock_text));
-    }
+    format_clock_text(displayed_clock_text, sizeof(displayed_clock_text));
     render_frame(framebuffer, width, width, height, 0, 0, width, height, focused, mouse_x, mouse_y, click_count,
                  menu_visible, hovered_item, hovered_task_slot, hovered_taskbar_button,
                  context_visible, context_x, context_y, hovered_context_item,
@@ -2362,26 +2392,9 @@ int main(void) {
         int processed_events = 0;
         int clock_dirty = 0;
         char pending_clock_text[12];
-        uint32_t loop_tick = user_uptime_ticks();
 
         dirty_valid = 0;
-        if (clock_has_base) {
-            if (loop_tick - clock_last_sync_tick >= 6000U &&
-                read_clock_day_seconds(&clock_base_seconds) == 0) {
-                clock_base_tick = loop_tick;
-                clock_last_sync_tick = loop_tick;
-            }
-            format_clock_text_from_base(pending_clock_text, sizeof(pending_clock_text),
-                                        clock_base_seconds, clock_base_tick, loop_tick);
-        } else if (read_clock_day_seconds(&clock_base_seconds) == 0) {
-            clock_has_base = 1;
-            clock_base_tick = loop_tick;
-            clock_last_sync_tick = loop_tick;
-            format_clock_text_from_base(pending_clock_text, sizeof(pending_clock_text),
-                                        clock_base_seconds, clock_base_tick, loop_tick);
-        } else {
-            format_clock_text(pending_clock_text, sizeof(pending_clock_text));
-        }
+        format_clock_text(pending_clock_text, sizeof(pending_clock_text));
         if (!clock_text_equal(displayed_clock_text, pending_clock_text)) {
             clock_dirty = 1;
             redraw = 1;

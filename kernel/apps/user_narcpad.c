@@ -12,13 +12,13 @@
 #define strncpy user_strncpy
 #define memset user_memset
 
-#define NARCPAD_MARGIN 12
-#define NARCPAD_HEADER_H 42
-#define NARCPAD_STATUS_H 24
-#define NARCPAD_GUTTER_W 44
+#define NARCPAD_MARGIN 14
+#define NARCPAD_HEADER_H 52
+#define NARCPAD_STATUS_H 28
+#define NARCPAD_GUTTER_W 42
 #define NARCPAD_TEXT_PAD_X 12
-#define NARCPAD_TEXT_PAD_Y 10
-#define NARCPAD_LINE_H 16
+#define NARCPAD_TEXT_PAD_Y 12
+#define NARCPAD_LINE_H 14
 #define NARCPAD_CHAR_W 8
 #define NARCPAD_TAB_W 4
 #define NARCPAD_MIN_WRAP_COLS 8
@@ -154,6 +154,81 @@ static USER_CODE int narcpad_text_len(const char* text) {
     return len;
 }
 
+static USER_CODE void narcpad_copy_ellipsized(char* dst, int dst_len, const char* src, int max_px) {
+    int max_chars;
+    int src_len;
+    int i;
+
+    if (!dst || dst_len <= 0) return;
+    if (!src) src = "";
+    if (max_px <= 0) {
+        dst[0] = '\0';
+        return;
+    }
+    max_chars = max_px / NARCPAD_CHAR_W;
+    if (max_chars < 1) {
+        dst[0] = '\0';
+        return;
+    }
+    if (max_chars > dst_len - 1) max_chars = dst_len - 1;
+    src_len = narcpad_text_len(src);
+    if (src_len <= max_chars) {
+        strncpy(dst, src, (uint32_t)dst_len - 1U);
+        dst[dst_len - 1] = '\0';
+        return;
+    }
+    if (max_chars <= 3) {
+        for (i = 0; i < max_chars && i + 1 < dst_len; i++) dst[i] = '.';
+        dst[i] = '\0';
+        return;
+    }
+    for (i = 0; i < max_chars - 3 && i + 1 < dst_len; i++) dst[i] = src[i];
+    dst[i++] = '.';
+    dst[i++] = '.';
+    dst[i++] = '.';
+    dst[i] = '\0';
+}
+
+static USER_CODE void narcpad_draw_text_fit(user_gui_surface_t* surface, int x, int y, int max_w,
+                                            const char* text, uint32_t color) {
+    char clipped[96];
+
+    if (!surface || max_w <= 0) return;
+    narcpad_copy_ellipsized(clipped, (int)sizeof(clipped), text, max_w);
+    user_gui_draw_string(surface, x, y, clipped, color);
+}
+
+static USER_CODE void narcpad_draw_int(user_gui_surface_t* surface, int x, int y, int value,
+                                       uint32_t color) {
+    char buf[16];
+    int pos = 0;
+    unsigned int n;
+
+    if (!surface) return;
+    if (value == 0) {
+        user_gui_draw_string(surface, x, y, "0", color);
+        return;
+    }
+    if (value < 0) {
+        buf[pos++] = '-';
+        n = (unsigned int)(-value);
+    } else {
+        n = (unsigned int)value;
+    }
+    {
+        char tmp[12];
+        int len = 0;
+
+        while (n > 0U && len < (int)sizeof(tmp)) {
+            tmp[len++] = (char)('0' + (n % 10U));
+            n /= 10U;
+        }
+        while (len > 0 && pos + 1 < (int)sizeof(buf)) buf[pos++] = tmp[--len];
+    }
+    buf[pos] = '\0';
+    user_gui_draw_string(surface, x, y, buf, color);
+}
+
 static USER_CODE void narcpad_init_layout(narcpad_layout_t* layout, int surface_w, int surface_h) {
     int header_h = NARCPAD_HEADER_H;
     int status_h = NARCPAD_STATUS_H;
@@ -161,7 +236,7 @@ static USER_CODE void narcpad_init_layout(narcpad_layout_t* layout, int surface_
     if (!layout) return;
     if (surface_w < 1) surface_w = USER_NARCPAD_SURFACE_W;
     if (surface_h < 1) surface_h = USER_NARCPAD_SURFACE_H;
-    if (surface_h < 180) {
+    if (surface_h < 190) {
         header_h = 0;
         status_h = 0;
     }
@@ -178,7 +253,7 @@ static USER_CODE void narcpad_init_layout(narcpad_layout_t* layout, int surface_
         layout->editor_h = surface_h;
     }
     layout->gutter_x = layout->editor_x;
-    layout->gutter_w = surface_w < 420 ? 34 : NARCPAD_GUTTER_W;
+    layout->gutter_w = surface_w < 420 ? 32 : NARCPAD_GUTTER_W;
     layout->text_x = layout->editor_x + layout->gutter_w + NARCPAD_TEXT_PAD_X;
     layout->text_y = layout->editor_y + NARCPAD_TEXT_PAD_Y;
     layout->text_w = layout->editor_w - layout->gutter_w - NARCPAD_TEXT_PAD_X * 2 - 8;
@@ -301,22 +376,23 @@ static USER_CODE void narcpad_draw_segment(user_gui_surface_t* surface, const na
     }
     row_y = layout->text_y + (visual_line - top_line) * NARCPAD_LINE_H;
     if (measure && visual_line == measure->caret_visual_line) {
-        user_gui_fill_rect(surface, layout->editor_x + 1, row_y,
-                           layout->editor_w - 2, NARCPAD_LINE_H, 0xE8F1FA);
+        user_gui_fill_rect_alpha(surface, layout->editor_x + layout->gutter_w + 1, row_y,
+                                 layout->editor_w - layout->gutter_w - 10,
+                                 NARCPAD_LINE_H, UI_ACCENT_ALT, 24);
     }
     if (first_wrap) {
         int digits = narcpad_digit_count(physical_line);
         int tx = layout->gutter_x + layout->gutter_w - digits * NARCPAD_CHAR_W - 8;
 
         if (tx < layout->gutter_x + 2) tx = layout->gutter_x + 2;
-        user_gui_draw_int_crisp_tall(surface, tx, row_y, physical_line, UI_TEXT_SUBTLE);
+        narcpad_draw_int(surface, tx, row_y + 2, physical_line, UI_TEXT_SUBTLE);
     } else {
-        user_gui_draw_string_crisp_tall(surface, layout->gutter_x + layout->gutter_w - 18, row_y,
-                                        ">", UI_TEXT_SUBTLE);
+        user_gui_draw_string(surface, layout->gutter_x + layout->gutter_w - 18, row_y + 2,
+                             ">", UI_TEXT_SUBTLE);
     }
     col_count = narcpad_segment_to_buffer(text, len, line_buf, sizeof(line_buf), layout->chars_per_line);
     (void)col_count;
-    user_gui_draw_string_crisp_tall(surface, layout->text_x, row_y, line_buf, UI_TEXT_DARK);
+    user_gui_draw_string(surface, layout->text_x, row_y + 2, line_buf, UI_TEXT_DARK);
 }
 
 static USER_CODE void narcpad_walk_text(const char* content, const narcpad_layout_t* layout,
@@ -384,48 +460,70 @@ static USER_CODE void narcpad_walk_text(const char* content, const narcpad_layou
 static USER_CODE void narcpad_draw_header(user_gui_surface_t* surface, user_narcpad_state_t* state,
                                           const narcpad_text_measure_t* measure) {
     const char* path;
-    int title_len;
+    int content_x;
+    int content_w;
+    int chip_w;
     int chip_x;
+    char count_text[16];
+    int count_len;
 
-    if (!surface || surface->height < 180) return;
+    if (!surface || surface->height < 190) return;
     user_gui_fill_rect(surface, 0, 0, surface->width, NARCPAD_HEADER_H, UI_SURFACE_0);
-    user_gui_fill_rect_alpha(surface, 0, NARCPAD_HEADER_H - 1, surface->width, 1, UI_ACCENT_ALT, 92);
-    user_gui_draw_string_tall_shadow(surface, 16, 7, "NarcPad", UI_TEXT, UI_SHADOW);
-    user_gui_fill_rect_alpha(surface, 86, 11, 1, 18, UI_BORDER_SOFT, 255);
-    user_gui_draw_string_crisp(surface, 96, 10, state && state->title[0] ? state->title : "untitled.txt", UI_TEXT);
+    user_gui_fill_rect_alpha(surface, 0, NARCPAD_HEADER_H - 1, surface->width, 1, UI_BORDER_SOFT, 255);
+    user_gui_draw_rounded_rect(surface, 14, 10, 32, 32, UI_RADIUS_SM,
+                               user_gui_mix_color(UI_ACCENT_ALT, UI_SURFACE_0, 96), 235);
+    user_gui_draw_icon(surface, USER_GUI_ICON_NARCPAD, 20, 16, 20, UI_ACCENT_ALT, 1);
+    content_x = 58;
+    content_w = surface->width - content_x - 16;
     path = state && state->path[0] ? state->path : "Unsaved document";
-    user_gui_draw_string_crisp(surface, 96, 25, path, UI_TEXT_MUTED);
-    title_len = state && state->title[0] ? narcpad_text_len(state->title) : 12;
-    chip_x = 112 + title_len * NARCPAD_CHAR_W;
-    if (chip_x < surface->width - 110 && measure) {
-        narcpad_draw_panel_flat(surface, chip_x, 9, 82, 20, UI_RADIUS_SM,
+    chip_w = 0;
+    if (measure && surface->width >= 430) {
+        count_len = narcpad_digit_count(measure->char_count);
+        chip_w = 42 + count_len * NARCPAD_CHAR_W;
+        if (chip_w < 70) chip_w = 70;
+        if (chip_w > 108) chip_w = 108;
+        chip_x = surface->width - chip_w - 14;
+        narcpad_draw_panel_flat(surface, chip_x, 13, chip_w, 26, UI_RADIUS_SM,
                                 UI_SURFACE_2, 235, UI_BORDER_SOFT, 255);
-        user_gui_draw_int_crisp(surface, chip_x + 10, 15, measure->char_count, UI_ACCENT_ALT);
-        user_gui_draw_string_crisp(surface, chip_x + 40, 15, "ch", UI_TEXT_MUTED);
+        narcpad_draw_int(surface, chip_x + 10, 22, measure->char_count, UI_ACCENT_ALT);
+        count_text[0] = 'c';
+        count_text[1] = 'h';
+        count_text[2] = '\0';
+        user_gui_draw_string(surface, chip_x + chip_w - 25, 22, count_text, UI_TEXT_MUTED);
+        content_w = chip_x - content_x - 12;
     }
+    narcpad_draw_text_fit(surface, content_x, 12, content_w,
+                          state && state->title[0] ? state->title : "untitled.txt", UI_TEXT);
+    narcpad_draw_text_fit(surface, content_x, 30, content_w, path, UI_TEXT_MUTED);
 }
 
 static USER_CODE void narcpad_draw_status(user_gui_surface_t* surface, const narcpad_layout_t* layout,
                                           const narcpad_text_measure_t* measure, int top_line) {
     int y;
     int x;
+    int compact;
 
-    if (!surface || !layout || !measure || surface->height < 180) return;
+    if (!surface || !layout || !measure || surface->height < 190) return;
     y = surface->height - NARCPAD_STATUS_H;
     user_gui_fill_rect(surface, 0, y, surface->width, NARCPAD_STATUS_H, UI_SURFACE_0);
     user_gui_fill_rect_alpha(surface, 0, y, surface->width, 1, UI_BORDER_SOFT, 255);
+    compact = surface->width < 500;
     x = 16;
-    user_gui_draw_string_crisp(surface, x, y + 8, "Ln", UI_TEXT_SUBTLE);
-    user_gui_draw_int_crisp(surface, x + 24, y + 8, measure->physical_lines, UI_TEXT);
-    x += 78;
-    user_gui_draw_string_crisp(surface, x, y + 8, "Col", UI_TEXT_SUBTLE);
-    user_gui_draw_int_crisp(surface, x + 32, y + 8, measure->caret_col + 1, UI_TEXT);
-    x += 92;
-    user_gui_draw_string_crisp(surface, x, y + 8, "Rows", UI_TEXT_SUBTLE);
-    user_gui_draw_int_crisp(surface, x + 42, y + 8, measure->total_visual_lines, UI_TEXT);
-    x += 112;
-    user_gui_draw_string_crisp(surface, x, y + 8, "Top", UI_TEXT_SUBTLE);
-    user_gui_draw_int_crisp(surface, x + 34, y + 8, top_line + 1, UI_TEXT_MUTED);
+    user_gui_draw_string(surface, x, y + 10, "Ln", UI_TEXT_SUBTLE);
+    narcpad_draw_int(surface, x + 24, y + 10, measure->physical_lines, UI_TEXT);
+    x += compact ? 68 : 82;
+    user_gui_draw_string(surface, x, y + 10, "Col", UI_TEXT_SUBTLE);
+    narcpad_draw_int(surface, x + 32, y + 10, measure->caret_col + 1, UI_TEXT);
+    if (!compact) {
+        x += 96;
+        user_gui_draw_string(surface, x, y + 10, "Rows", UI_TEXT_SUBTLE);
+        narcpad_draw_int(surface, x + 42, y + 10, measure->total_visual_lines, UI_TEXT);
+        x += 116;
+        if (x + 64 < surface->width) {
+            user_gui_draw_string(surface, x, y + 10, "Top", UI_TEXT_SUBTLE);
+            narcpad_draw_int(surface, x + 34, y + 10, top_line + 1, UI_TEXT_MUTED);
+        }
+    }
 }
 
 static USER_CODE void narcpad_draw_scrollbar(user_gui_surface_t* surface, const narcpad_layout_t* layout,
@@ -448,8 +546,8 @@ static USER_CODE void narcpad_draw_scrollbar(user_gui_surface_t* surface, const 
     if (thumb_h < 18) thumb_h = 18;
     if (thumb_h > track_h) thumb_h = track_h;
     thumb_y = track_y + (top_line * (track_h - thumb_h)) / max_top;
-    user_gui_draw_rounded_rect(surface, track_x, track_y, 3, track_h, 2, 0xD2DAE3, 255);
-    user_gui_draw_rounded_rect(surface, track_x - 1, thumb_y, 5, thumb_h, 3, UI_ACCENT_DEEP, 255);
+    user_gui_draw_rounded_rect(surface, track_x, track_y, 3, track_h, 2, 0xD5DDE7, 210);
+    user_gui_draw_rounded_rect(surface, track_x - 1, thumb_y, 5, thumb_h, 3, UI_ACCENT_DEEP, 230);
 }
 
 static USER_CODE void narcpad_scroll_by(user_narcpad_state_t* state, int wheel_steps) {
@@ -498,14 +596,15 @@ static USER_CODE void narcpad_render(user_narcpad_state_t* state) {
     if (state->view_scroll > max_top_line) state->view_scroll = max_top_line;
     top_line = state->view_scroll;
 
-    user_gui_fill_rect(&surface, 0, 0, surface.width, surface.height, UI_SURFACE_0);
+    user_gui_fill_rect(&surface, 0, 0, surface.width, surface.height, 0xEEF3F8);
+    user_gui_fill_rect_alpha(&surface, 0, 0, surface.width, surface.height, UI_ACCENT_ALT, 8);
     narcpad_draw_header(&surface, state, &measure);
     narcpad_draw_panel_flat(&surface, layout.editor_x, layout.editor_y, layout.editor_w, layout.editor_h,
-                            UI_RADIUS_MD, 0xF6F8FB, 255, 0xCFD8E2, 255);
+                            UI_RADIUS_MD, 0xFBFCFE, 255, 0xD4DCE6, 255);
     user_gui_fill_rect(&surface, layout.editor_x + 1, layout.editor_y + 1,
-                       layout.gutter_w - 2, layout.editor_h - 2, 0xEDF2F7);
+                       layout.gutter_w - 2, layout.editor_h - 2, 0xF2F5F9);
     user_gui_fill_rect_alpha(&surface, layout.editor_x + layout.gutter_w, layout.editor_y + 8,
-                             1, layout.editor_h - 16, 0xCFD8E2, 255);
+                             1, layout.editor_h - 16, 0xD4DCE6, 255);
     narcpad_walk_text(state->content, &layout, top_line, &surface, &measure, 0);
     blink_phase = (int)((user_uptime_ticks() / 20U) & 1U);
     if (blink_phase == 0 &&

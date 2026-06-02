@@ -15,6 +15,15 @@
 
 #define FOLDER_ICON_W 44
 #define FOLDER_ICON_H 44
+#define EXPLORER_MARGIN 12
+#define EXPLORER_TOPBAR_H 44
+#define EXPLORER_PANEL_GAP 12
+#define EXPLORER_NAV_ITEM_H 28
+#define EXPLORER_ROW_H 58
+#define EXPLORER_ROW_CARD_H 48
+#define EXPLORER_LIST_TOP_PAD 48
+#define EXPLORER_STATUS_H 28
+#define EXPLORER_CHAR_W 8
 
 #if defined(__x86_64__)
 extern const uint8_t _binary_obj_x86_64_user_assets_folder_icon_rgba_start[];
@@ -44,13 +53,13 @@ static USER_CODE int explorer_compact_layout(int width) {
 }
 
 static USER_CODE int explorer_sidebar_width(int client_w) {
-    if (client_w < 470) return 104;
-    if (client_w < 620) return 116;
-    return 132;
+    if (client_w < 470) return 110;
+    if (client_w < 620) return 128;
+    return 158;
 }
 
 static USER_CODE int explorer_visible_rows(int panel_h) {
-    int rows = (panel_h - 64) / 54;
+    int rows = (panel_h - EXPLORER_LIST_TOP_PAD - EXPLORER_STATUS_H) / EXPLORER_ROW_H;
     if (rows < 1) rows = 1;
     return rows;
 }
@@ -59,18 +68,25 @@ static USER_CODE int explorer_row_from_local_y(user_explorer_state_t* state, int
     int panel_y;
     int panel_h;
     int list_y;
-    int row_h = 54;
     int visible_rows;
     int row;
 
     if (!state) return -1;
-    panel_y = 36;
-    panel_h = state->render_h - 36;
-    list_y = panel_y + 42;
+    panel_y = EXPLORER_TOPBAR_H;
+    panel_h = state->render_h - EXPLORER_TOPBAR_H - EXPLORER_MARGIN;
+    list_y = panel_y + EXPLORER_LIST_TOP_PAD;
     visible_rows = explorer_visible_rows(panel_h);
-    if (local_y < list_y || local_y >= list_y + visible_rows * row_h) return -1;
-    row = state->list_scroll + ((local_y - list_y) / row_h);
+    if (local_y < list_y || local_y >= list_y + visible_rows * EXPLORER_ROW_H) return -1;
+    row = state->list_scroll + ((local_y - list_y) / EXPLORER_ROW_H);
     return row;
+}
+
+static USER_CODE int explorer_text_len(const char* text) {
+    int len = 0;
+
+    if (!text) return 0;
+    while (text[len] != '\0') len++;
+    return len;
 }
 
 static USER_CODE void explorer_copy_truncated(char* dst, int dst_len, const char* src, int max_chars) {
@@ -86,14 +102,60 @@ static USER_CODE void explorer_copy_truncated(char* dst, int dst_len, const char
     dst[i] = '\0';
 }
 
+static USER_CODE void explorer_copy_ellipsized(char* dst, int dst_len, const char* src, int max_px) {
+    int max_chars;
+    int src_len;
+    int i;
+
+    if (!dst || dst_len <= 0) return;
+    if (!src) src = "";
+    if (max_px <= 0) {
+        dst[0] = '\0';
+        return;
+    }
+    max_chars = max_px / EXPLORER_CHAR_W;
+    if (max_chars < 1) {
+        dst[0] = '\0';
+        return;
+    }
+    if (max_chars > dst_len - 1) max_chars = dst_len - 1;
+    src_len = explorer_text_len(src);
+    if (src_len <= max_chars) {
+        explorer_copy_truncated(dst, dst_len, src, max_chars);
+        return;
+    }
+    if (max_chars <= 3) {
+        for (i = 0; i < max_chars && i + 1 < dst_len; i++) dst[i] = '.';
+        dst[i] = '\0';
+        return;
+    }
+    for (i = 0; i < max_chars - 3 && i + 1 < dst_len; i++) dst[i] = src[i];
+    dst[i++] = '.';
+    dst[i++] = '.';
+    dst[i++] = '.';
+    dst[i] = '\0';
+}
+
+static USER_CODE void explorer_draw_text_fit(user_gui_surface_t* surface, int x, int y, int max_w,
+                                             const char* text, uint32_t color) {
+    char clipped[96];
+
+    if (!surface || max_w <= 0) return;
+    explorer_copy_ellipsized(clipped, (int)sizeof(clipped), text, max_w);
+    user_gui_draw_string(surface, x, y, clipped, color);
+}
+
+static USER_CODE uint32_t explorer_mix(uint32_t fg, uint32_t bg, int alpha) {
+    return user_gui_mix_color(fg, bg, alpha);
+}
+
 static USER_CODE void explorer_draw_panel_flat(user_gui_surface_t* surface, int x, int y, int w, int h,
                                                int radius, uint32_t fill, int fill_alpha,
                                                uint32_t border, int border_alpha) {
+    user_gui_draw_rounded_rect(surface, x + 2, y + 3, w, h, radius, UI_SHADOW, 52);
     user_gui_draw_rounded_rect(surface, x, y, w, h, radius, fill, fill_alpha);
-    if (w > 6 && h > 6) {
-        user_gui_draw_rounded_rect(surface, x + 1, y + 1, w - 2, h - 2,
-                                   radius > 1 ? radius - 1 : radius, 0xFFFFFF, 5);
-    }
+    if (w > 8 && h > 8) user_gui_draw_rounded_rect(surface, x + 1, y + 1, w - 2, h - 2, radius > 1 ? radius - 1 : radius, UI_SURFACE_0, 26);
+    if (w > 18) user_gui_fill_rect_alpha(surface, x + 9, y + 1, w - 18, 1, UI_HILITE_SOFT, 34);
     user_gui_draw_rounded_rect(surface, x, y, w, h, radius, border, border_alpha);
 }
 
@@ -119,47 +181,67 @@ static USER_CODE void explorer_draw_file_icon(user_gui_surface_t* surface, int x
 
 static USER_CODE void explorer_draw_chip_left(user_gui_surface_t* surface, int x, int y, int w, int h,
                                               uint32_t fill, uint32_t text, const char* label) {
+    char clipped[40];
+
     if (!surface || !label) return;
     user_gui_draw_rounded_rect(surface, x, y, w, h, UI_RADIUS_SM, fill, 235);
     user_gui_draw_rounded_rect(surface, x, y, w, h, UI_RADIUS_SM, UI_BORDER_SOFT, 180);
-    user_gui_draw_string(surface, x + 10, y + 6, label, text);
+    explorer_copy_ellipsized(clipped, (int)sizeof(clipped), label, w - 16);
+    user_gui_draw_string(surface, x + 8, y + (h - 8) / 2, clipped, text);
 }
 
 static USER_CODE void explorer_draw_list_card(user_gui_surface_t* surface, int x, int y, int w, int h,
                                               int type, const char* name, int size, int selected) {
-    uint32_t fill = selected ? UI_ACCENT_DEEP : UI_SURFACE_1;
+    uint32_t fill = selected ? explorer_mix(UI_ACCENT, UI_SURFACE_2, 120) : UI_SURFACE_1;
     uint32_t border = selected ? UI_ACCENT_ALT : UI_BORDER_SOFT;
     char size_buf[16];
+    char kind_buf[20];
+    int meta_x;
 
     explorer_draw_panel_flat(surface, x, y, w, h, UI_RADIUS_MD, fill, 235, border, 255);
-    if (selected) user_gui_fill_rect_alpha(surface, x + 8, y + 6, w - 16, 2, UI_ACCENT_ALT, 180);
-    if (type == FS_NODE_DIR) explorer_draw_folder_icon(surface, x + 10, y + 8, selected);
-    else explorer_draw_file_icon(surface, x + 10, y + 8, selected);
-    user_gui_draw_string(surface, x + 50, y + 11, name, UI_TEXT);
+    if (selected) user_gui_fill_rect_alpha(surface, x + 8, y + h - 4, w - 16, 2, UI_ACCENT_ALT, 170);
+    if (type == FS_NODE_DIR) explorer_draw_folder_icon(surface, x + 12, y + 10, selected);
+    else explorer_draw_file_icon(surface, x + 12, y + 10, selected);
+    explorer_draw_text_fit(surface, x + 54, y + 10, w - 128, name, UI_TEXT);
+    meta_x = x + 54;
     if (type == FS_NODE_DIR) {
-        user_gui_draw_string(surface, x + 50, y + 27, "Directory", selected ? UI_TEXT : UI_TEXT_MUTED);
+        user_gui_draw_string(surface, meta_x, y + 29, "Folder", selected ? UI_TEXT_MUTED : UI_TEXT_SUBTLE);
     } else {
         memset(size_buf, 0, sizeof(size_buf));
+        memset(kind_buf, 0, sizeof(kind_buf));
         (void)explorer_append_uint(size_buf, sizeof(size_buf), (uint32_t)size);
-        user_gui_draw_string(surface, x + 50, y + 27, "File", selected ? UI_TEXT : UI_TEXT_MUTED);
-        user_gui_draw_string(surface, x + w - 52, y + 27, size_buf, selected ? UI_TEXT : UI_ACCENT_ALT);
-        user_gui_draw_string(surface, x + w - 20, y + 27, "B", selected ? UI_TEXT_MUTED : UI_TEXT_SUBTLE);
+        (void)explorer_append_text(kind_buf, sizeof(kind_buf), "File, ");
+        (void)explorer_append_text(kind_buf, sizeof(kind_buf), size_buf);
+        (void)explorer_append_text(kind_buf, sizeof(kind_buf), " B");
+        explorer_draw_text_fit(surface, meta_x, y + 29, w - 76, kind_buf, selected ? UI_TEXT_MUTED : UI_TEXT_SUBTLE);
     }
 }
 
 static USER_CODE void explorer_draw_breadcrumb(user_gui_surface_t* surface, int x, int y, int w, int current_dir) {
     char path[192];
     char shown[28];
+    int crumb_x = x + 174;
+    int crumb_w = w - 186;
 
+    if (crumb_w < 24) crumb_w = 24;
     explorer_build_path_for_idx(current_dir, path, sizeof(path));
-    explorer_copy_truncated(shown, sizeof(shown), path[0] != '\0' ? path : "/", (w - 40) / 8);
-    user_gui_draw_string_tall_shadow(surface, x + 12, y + 9, "Path", UI_TEXT_SUBTLE, UI_SHADOW);
-    user_gui_draw_string(surface, x + 58, y + 14, shown, UI_TEXT);
+    explorer_copy_ellipsized(shown, sizeof(shown), path[0] != '\0' ? path : "/", crumb_w - 20);
+    user_gui_fill_rect(surface, x, y, w, EXPLORER_TOPBAR_H, UI_SURFACE_1);
+    user_gui_fill_rect_alpha(surface, x, y, w, 20, UI_SURFACE_2, 150);
+    user_gui_fill_rect_alpha(surface, x, y + EXPLORER_TOPBAR_H - 1, w, 1, UI_BORDER_SOFT, 230);
+    user_gui_draw_icon(surface, USER_GUI_ICON_EXPLORER, x + 12, y + 8, 24, UI_ACCENT_ALT, 0);
+    user_gui_draw_string_tall_shadow(surface, x + 44, y + 7, "NarcExplorer", UI_TEXT, UI_SHADOW);
+    if (crumb_x + crumb_w > x + w - 12) crumb_w = x + w - 12 - crumb_x;
+    if (crumb_w > 0) {
+        user_gui_draw_rounded_rect(surface, crumb_x, y + 10, crumb_w, 24, UI_RADIUS_SM, UI_SURFACE_0, 210);
+        user_gui_draw_rounded_rect(surface, crumb_x, y + 10, crumb_w, 24, UI_RADIUS_SM, UI_BORDER_SOFT, 180);
+        explorer_draw_text_fit(surface, crumb_x + 10, y + 18, crumb_w - 20, shown, UI_TEXT_MUTED);
+    }
 }
 
 static USER_CODE void explorer_draw_modal(user_gui_surface_t* surface, user_explorer_state_t* state) {
-    int w = 320;
-    int h = 140;
+    int w = 360;
+    int h = 156;
     int x;
     int y;
     disk_fs_node_t node;
@@ -177,21 +259,21 @@ static USER_CODE void explorer_draw_modal(user_gui_surface_t* surface, user_expl
     explorer_draw_panel_flat(surface, x, y, w, h, UI_RADIUS_MD, UI_SURFACE_1, 250, UI_BORDER_SOFT, 255);
     if (state->modal_mode == USER_EXPLORER_MODAL_RENAME) {
         user_gui_draw_string_tall_shadow(surface, x + 20, y + 16, "Rename Item", UI_TEXT, UI_SHADOW);
-        user_gui_draw_string(surface, x + 20, y + 38, "Type a new name and press Enter.", UI_TEXT_MUTED);
-        user_gui_fill_rect(surface, x + 20, y + 60, w - 40, 28, UI_SURFACE_0);
-        user_gui_draw_rect(surface, x + 20, y + 60, w - 40, 28, UI_BORDER_SOFT);
-        user_gui_draw_string(surface, x + 28, y + 69, state->modal_input, UI_TEXT);
-        explorer_draw_chip_left(surface, x + w - 136, y + h - 32, 50, 18, UI_SURFACE_2, UI_TEXT_MUTED, "Esc");
-        explorer_draw_chip_left(surface, x + w - 78, y + h - 32, 54, 18, UI_ACCENT_DEEP, UI_TEXT, "Enter");
+        explorer_draw_text_fit(surface, x + 20, y + 42, w - 40, "Type a new name and press Enter.", UI_TEXT_MUTED);
+        user_gui_draw_rounded_rect(surface, x + 20, y + 66, w - 40, 30, UI_RADIUS_SM, UI_SURFACE_0, 255);
+        user_gui_draw_rounded_rect(surface, x + 20, y + 66, w - 40, 30, UI_RADIUS_SM, UI_BORDER_STRONG, 210);
+        explorer_draw_text_fit(surface, x + 30, y + 77, w - 60, state->modal_input, UI_TEXT);
+        explorer_draw_chip_left(surface, x + w - 144, y + h - 36, 54, 22, UI_SURFACE_2, UI_TEXT_MUTED, "Esc");
+        explorer_draw_chip_left(surface, x + w - 82, y + h - 36, 62, 22, UI_ACCENT_DEEP, UI_TEXT, "Enter");
     } else if (state->modal_mode == USER_EXPLORER_MODAL_DELETE) {
         user_gui_draw_string_tall_shadow(surface, x + 20, y + 16, "Delete Item", UI_DANGER, UI_SHADOW);
-        user_gui_draw_string(surface, x + 20, y + 42, "Delete the selected item?", UI_TEXT);
+        explorer_draw_text_fit(surface, x + 20, y + 44, w - 40, "Delete the selected item?", UI_TEXT);
         if (state->selected_idx >= 0 && user_fs_get_node_info(state->selected_idx, &node) == 0 && node.flags != 0) {
-            explorer_copy_truncated(name_buf, sizeof(name_buf), node.name, 30);
-            user_gui_draw_string(surface, x + 20, y + 60, name_buf, UI_TEXT_MUTED);
+            explorer_copy_ellipsized(name_buf, sizeof(name_buf), node.name, w - 40);
+            explorer_draw_text_fit(surface, x + 20, y + 68, w - 40, name_buf, UI_TEXT_MUTED);
         }
-        explorer_draw_chip_left(surface, x + w - 136, y + h - 32, 50, 18, UI_SURFACE_2, UI_TEXT_MUTED, "Esc");
-        explorer_draw_chip_left(surface, x + w - 78, y + h - 32, 54, 18, UI_DANGER, UI_TEXT, "Delete");
+        explorer_draw_chip_left(surface, x + w - 144, y + h - 36, 54, 22, UI_SURFACE_2, UI_TEXT_MUTED, "Esc");
+        explorer_draw_chip_left(surface, x + w - 82, y + h - 36, 62, 22, UI_DANGER, UI_TEXT, "Delete");
     }
 }
 
@@ -221,11 +303,13 @@ static USER_CODE void explorer_render(user_explorer_state_t* state) {
 
     compact = explorer_compact_layout(surface.width);
     sidebar_w = explorer_sidebar_width(surface.width);
-    content_x = sidebar_w + 12;
-    content_w = surface.width - sidebar_w - 12;
-    panel_y = 36;
-    panel_h = surface.height - 36;
-    list_y = panel_y + 42;
+    content_x = EXPLORER_MARGIN + sidebar_w + EXPLORER_PANEL_GAP;
+    content_w = surface.width - content_x - EXPLORER_MARGIN;
+    if (content_w < 120) content_w = 120;
+    panel_y = EXPLORER_TOPBAR_H;
+    panel_h = surface.height - EXPLORER_TOPBAR_H - EXPLORER_MARGIN;
+    if (panel_h < 120) panel_h = 120;
+    list_y = panel_y + EXPLORER_LIST_TOP_PAD;
     item_count = explorer_count_children(state->current_dir);
     visible_rows = explorer_visible_rows(panel_h);
     max_scroll = item_count > visible_rows ? item_count - visible_rows : 0;
@@ -233,47 +317,49 @@ static USER_CODE void explorer_render(user_explorer_state_t* state) {
     if (state->list_scroll > max_scroll) state->list_scroll = max_scroll;
     start_row = state->list_scroll;
 
-    user_gui_fill_rect(&surface, 0, 0, surface.width, surface.height, UI_SURFACE_1);
+    user_gui_fill_rect(&surface, 0, 0, surface.width, surface.height, UI_WINDOW_CLIENT_BG);
+    user_gui_fill_rect_alpha(&surface, 0, 0, surface.width, surface.height, UI_SURFACE_1, 126);
     explorer_draw_breadcrumb(&surface, 0, 0, surface.width, state->current_dir);
 
-    explorer_draw_panel_flat(&surface, 0, panel_y, sidebar_w, panel_h, UI_RADIUS_MD, UI_SURFACE_1, 235, UI_BORDER_SOFT, 255);
-    user_gui_draw_string_tall_shadow(&surface, 16, panel_y + 10, "Places", UI_TEXT, UI_SHADOW);
-    explorer_draw_chip_left(&surface, 12, panel_y + 40, sidebar_w - 24, 22,
+    explorer_draw_panel_flat(&surface, EXPLORER_MARGIN, panel_y, sidebar_w, panel_h, UI_RADIUS_MD, UI_SURFACE_1, 235, UI_BORDER_SOFT, 255);
+    user_gui_draw_string_tall_shadow(&surface, EXPLORER_MARGIN + 14, panel_y + 12, "Places", UI_TEXT, UI_SHADOW);
+    explorer_draw_chip_left(&surface, EXPLORER_MARGIN + 12, panel_y + 42, sidebar_w - 24, EXPLORER_NAV_ITEM_H,
                             state->current_dir == -1 ? UI_ACCENT_DEEP : UI_SURFACE_2, UI_TEXT, "Root");
-    explorer_draw_chip_left(&surface, 12, panel_y + 68, sidebar_w - 24, 22, UI_SURFACE_2, UI_TEXT, "Desktop");
-    explorer_draw_chip_left(&surface, 12, panel_y + 96, sidebar_w - 24, 22, UI_SURFACE_2, UI_TEXT,
+    explorer_draw_chip_left(&surface, EXPLORER_MARGIN + 12, panel_y + 76, sidebar_w - 24, EXPLORER_NAV_ITEM_H, UI_SURFACE_2, UI_TEXT, "Desktop");
+    explorer_draw_chip_left(&surface, EXPLORER_MARGIN + 12, panel_y + 110, sidebar_w - 24, EXPLORER_NAV_ITEM_H, UI_SURFACE_2, UI_TEXT,
                             compact ? "Home" : "Workspace");
-    user_gui_fill_rect_alpha(&surface, 12, panel_y + 132, sidebar_w - 24, 1, UI_BORDER_SOFT, 255);
-    user_gui_draw_string(&surface, 16, panel_y + 146, "Items", UI_TEXT_SUBTLE);
-    user_gui_draw_int(&surface, 64, panel_y + 146, item_count, UI_ACCENT_ALT);
-    user_gui_draw_string(&surface, 16, panel_y + panel_h - 44, "Status", UI_TEXT_SUBTLE);
+    user_gui_fill_rect_alpha(&surface, EXPLORER_MARGIN + 12, panel_y + 154, sidebar_w - 24, 1, UI_BORDER_SOFT, 255);
+    user_gui_draw_string(&surface, EXPLORER_MARGIN + 16, panel_y + 170, "Items", UI_TEXT_SUBTLE);
+    user_gui_draw_int(&surface, EXPLORER_MARGIN + 68, panel_y + 170, item_count, UI_ACCENT_ALT);
+    user_gui_draw_string(&surface, EXPLORER_MARGIN + 16, panel_y + panel_h - 48, "Selected", UI_TEXT_SUBTLE);
     if (state->selected_idx >= 0 && user_fs_get_node_info(state->selected_idx, &node) == 0 && node.flags != 0) {
-        explorer_copy_truncated(selected_buf, sizeof(selected_buf), node.name, compact ? 11 : 15);
-        user_gui_draw_string(&surface, 16, panel_y + panel_h - 28, selected_buf, UI_TEXT);
+        explorer_copy_ellipsized(selected_buf, sizeof(selected_buf), node.name, sidebar_w - 32);
+        explorer_draw_text_fit(&surface, EXPLORER_MARGIN + 16, panel_y + panel_h - 30, sidebar_w - 32, selected_buf, UI_TEXT);
     } else {
-        user_gui_draw_string(&surface, 16, panel_y + panel_h - 28, "No selection", UI_TEXT_MUTED);
+        explorer_draw_text_fit(&surface, EXPLORER_MARGIN + 16, panel_y + panel_h - 30, sidebar_w - 32, "No selection", UI_TEXT_MUTED);
     }
 
     explorer_draw_panel_flat(&surface, content_x, panel_y, content_w, panel_h, UI_RADIUS_MD, UI_SURFACE_1, 235, UI_BORDER_SOFT, 255);
-    user_gui_draw_string_tall_shadow(&surface, content_x + 14, panel_y + 10, "Directory", UI_TEXT, UI_SHADOW);
-    user_gui_draw_string(&surface, content_x + content_w - (compact ? 38 : 72), panel_y + 16,
-                         compact ? "Sync" : "Refresh", UI_TEXT_SUBTLE);
-    user_gui_fill_rect_alpha(&surface, content_x + 12, panel_y + 30, content_w - 24, 1, UI_BORDER_SOFT, 255);
+    user_gui_draw_string_tall_shadow(&surface, content_x + 16, panel_y + 12, "Directory", UI_TEXT, UI_SHADOW);
+    explorer_draw_chip_left(&surface, content_x + content_w - (compact ? 66 : 92), panel_y + 12,
+                            compact ? 50 : 76, 24, UI_SURFACE_2, UI_TEXT_MUTED,
+                            compact ? "Sync" : "Refresh");
+    user_gui_fill_rect_alpha(&surface, content_x + 14, panel_y + 42, content_w - 28, 1, UI_BORDER_SOFT, 255);
 
     if (item_count == 0) {
-        explorer_draw_panel_flat(&surface, content_x + 16, list_y + 28, content_w - 32, 96,
+        explorer_draw_panel_flat(&surface, content_x + 16, list_y + 26, content_w - 32, 104,
                                  UI_RADIUS_MD, UI_SURFACE_0, 255, UI_BORDER_SOFT, 255);
-        explorer_draw_folder_icon(&surface, content_x + 34, list_y + 52, 0);
-        user_gui_draw_string(&surface, content_x + 82, list_y + 58, "This directory is empty.", UI_TEXT);
-        user_gui_draw_string(&surface, content_x + 82, list_y + 76,
-                             compact ? "Create a file or folder to begin." :
-                                       "Create a file or folder to start using this workspace.",
-                             UI_TEXT_MUTED);
+        explorer_draw_folder_icon(&surface, content_x + 34, list_y + 58, 0);
+        explorer_draw_text_fit(&surface, content_x + 82, list_y + 60, content_w - 108, "This directory is empty.", UI_TEXT);
+        explorer_draw_text_fit(&surface, content_x + 82, list_y + 80, content_w - 108,
+                               compact ? "Create a file or folder to begin." :
+                                         "Create a file or folder to start using this workspace.",
+                               UI_TEXT_MUTED);
     } else {
         for (int i = 0; i < MAX_FILES; i++) {
             if (user_fs_get_node_info(i, &node) != 0 || node.flags == 0 || node.parent_index != state->current_dir) continue;
             if (matched_row >= start_row && row < visible_rows) {
-                explorer_draw_list_card(&surface, content_x + 16, list_y + row * 54, content_w - 32, 44,
+                explorer_draw_list_card(&surface, content_x + 16, list_y + row * EXPLORER_ROW_H, content_w - 32, EXPLORER_ROW_CARD_H,
                                         node.flags, node.name, (int)node.size, state->selected_idx == i);
                 row++;
             }
@@ -282,11 +368,11 @@ static USER_CODE void explorer_render(user_explorer_state_t* state) {
         }
     }
 
-    user_gui_fill_rect_alpha(&surface, content_x + 12, panel_y + panel_h - 26, content_w - 24, 14, UI_SURFACE_0, 255);
+    user_gui_fill_rect_alpha(&surface, content_x + 14, panel_y + panel_h - 30, content_w - 28, 18, UI_SURFACE_0, 255);
     memset(status_buf, 0, sizeof(status_buf));
     (void)explorer_append_uint(status_buf, sizeof(status_buf), (uint32_t)item_count);
-    user_gui_draw_string(&surface, content_x + 18, panel_y + panel_h - 22, status_buf, UI_ACCENT_ALT);
-    user_gui_draw_string(&surface, content_x + 26 + (int)strlen(status_buf) * 8, panel_y + panel_h - 22,
+    user_gui_draw_string(&surface, content_x + 20, panel_y + panel_h - 25, status_buf, UI_ACCENT_ALT);
+    user_gui_draw_string(&surface, content_x + 28 + (int)strlen(status_buf) * 8, panel_y + panel_h - 25,
                          "items", UI_TEXT_SUBTLE);
 
     explorer_draw_modal(&surface, state);
@@ -536,7 +622,7 @@ static USER_CODE void explorer_scroll_by(user_explorer_state_t* state, int wheel
 
     if (!state || wheel_steps == 0) return;
     item_count = explorer_count_children(state->current_dir);
-    panel_h = state->render_h - 36;
+    panel_h = state->render_h - EXPLORER_TOPBAR_H - EXPLORER_MARGIN;
     visible_rows = explorer_visible_rows(panel_h);
     max_scroll = item_count > visible_rows ? item_count - visible_rows : 0;
     state->list_scroll -= wheel_steps * 3;
@@ -556,18 +642,22 @@ static USER_CODE void explorer_handle_pointer_down(user_explorer_state_t* state,
 
     if (!state) return;
     if (state->modal_mode != USER_EXPLORER_MODAL_NONE) {
-        int modal_w = 320;
-        int modal_h = 140;
+        int modal_w = 360;
+        int modal_h = 156;
         int modal_x = (state->render_w - modal_w) / 2;
         int modal_y = (state->render_h - modal_h) / 2;
 
-        if (local_x >= modal_x + modal_w - 136 && local_x <= modal_x + modal_w - 86 &&
-            local_y >= modal_y + modal_h - 32 && local_y <= modal_y + modal_h - 14) {
+        if (modal_x < 8) modal_x = 8;
+        if (modal_y < 8) modal_y = 8;
+        if (modal_w > state->render_w - 16) modal_w = state->render_w - 16;
+        if (modal_h > state->render_h - 16) modal_h = state->render_h - 16;
+        if (local_x >= modal_x + modal_w - 144 && local_x <= modal_x + modal_w - 90 &&
+            local_y >= modal_y + modal_h - 36 && local_y <= modal_y + modal_h - 14) {
             explorer_cancel_modal(state);
             return;
         }
-        if (local_x >= modal_x + modal_w - 78 && local_x <= modal_x + modal_w - 24 &&
-            local_y >= modal_y + modal_h - 32 && local_y <= modal_y + modal_h - 14) {
+        if (local_x >= modal_x + modal_w - 82 && local_x <= modal_x + modal_w - 20 &&
+            local_y >= modal_y + modal_h - 36 && local_y <= modal_y + modal_h - 14) {
             explorer_submit_modal(state);
         }
         return;
@@ -575,31 +665,31 @@ static USER_CODE void explorer_handle_pointer_down(user_explorer_state_t* state,
 
     compact = explorer_compact_layout(state->render_w);
     sidebar_w = explorer_sidebar_width(state->render_w);
-    content_x = sidebar_w + 12;
-    content_w = state->render_w - sidebar_w - 12;
-    panel_y = 36;
+    content_x = EXPLORER_MARGIN + sidebar_w + EXPLORER_PANEL_GAP;
+    content_w = state->render_w - content_x - EXPLORER_MARGIN;
+    panel_y = EXPLORER_TOPBAR_H;
 
     state->drag_candidate_idx = -1;
-    if (local_y >= 0 && local_y <= 28 && local_x >= 0 && local_x <= state->render_w) {
+    if (local_y >= 0 && local_y <= EXPLORER_TOPBAR_H && local_x >= 0 && local_x <= state->render_w) {
         explorer_open_dir(state, -1);
         return;
     }
-    if (local_y >= panel_y + 8 && local_y <= panel_y + 24 &&
-        local_x >= content_x + content_w - (compact ? 54 : 72) && local_x <= content_x + content_w - 8) {
+    if (local_y >= panel_y + 12 && local_y <= panel_y + 36 &&
+        local_x >= content_x + content_w - (compact ? 66 : 92) && local_x <= content_x + content_w - 16) {
         state->dirty = 1;
         return;
     }
-    if (local_x >= 12 && local_x <= sidebar_w - 12) {
-        if (local_y >= panel_y + 40 && local_y <= panel_y + 62) {
+    if (local_x >= EXPLORER_MARGIN + 12 && local_x <= EXPLORER_MARGIN + sidebar_w - 12) {
+        if (local_y >= panel_y + 42 && local_y <= panel_y + 42 + EXPLORER_NAV_ITEM_H) {
             explorer_open_dir(state, -1);
             return;
         }
-        if (local_y >= panel_y + 68 && local_y <= panel_y + 90) {
+        if (local_y >= panel_y + 76 && local_y <= panel_y + 76 + EXPLORER_NAV_ITEM_H) {
             int desktop_idx = user_fs_find_node("/desktop");
             explorer_open_dir(state, desktop_idx >= 0 ? desktop_idx : -1);
             return;
         }
-        if (local_y >= panel_y + 96 && local_y <= panel_y + 118) {
+        if (local_y >= panel_y + 110 && local_y <= panel_y + 110 + EXPLORER_NAV_ITEM_H) {
             int home_idx = user_fs_find_node("/home/user");
             if (home_idx >= 0) explorer_open_dir(state, home_idx);
             return;
@@ -636,17 +726,17 @@ static USER_CODE void explorer_handle_pointer_up(user_explorer_state_t* state, i
     if (!state || state->drag_candidate_idx < 0 || state->selected_idx != state->drag_candidate_idx) return;
 
     sidebar_w = explorer_sidebar_width(state->render_w);
-    content_x = sidebar_w + 12;
-    content_w = state->render_w - sidebar_w - 12;
-    panel_y = 36;
+    content_x = EXPLORER_MARGIN + sidebar_w + EXPLORER_PANEL_GAP;
+    content_w = state->render_w - content_x - EXPLORER_MARGIN;
+    panel_y = EXPLORER_TOPBAR_H;
 
-    if (local_x >= 12 && local_x <= sidebar_w - 12) {
-        if (local_y >= panel_y + 40 && local_y <= panel_y + 62) {
+    if (local_x >= EXPLORER_MARGIN + 12 && local_x <= EXPLORER_MARGIN + sidebar_w - 12) {
+        if (local_y >= panel_y + 42 && local_y <= panel_y + 42 + EXPLORER_NAV_ITEM_H) {
             explorer_move_selected_to(state, -1);
-        } else if (local_y >= panel_y + 68 && local_y <= panel_y + 90) {
+        } else if (local_y >= panel_y + 76 && local_y <= panel_y + 76 + EXPLORER_NAV_ITEM_H) {
             int desktop_idx = user_fs_find_node("/desktop");
             explorer_move_selected_to(state, desktop_idx >= 0 ? desktop_idx : -1);
-        } else if (local_y >= panel_y + 96 && local_y <= panel_y + 118) {
+        } else if (local_y >= panel_y + 110 && local_y <= panel_y + 110 + EXPLORER_NAV_ITEM_H) {
             int home_idx = user_fs_find_node("/home/user");
             if (home_idx >= 0) explorer_move_selected_to(state, home_idx);
         }
@@ -670,8 +760,8 @@ static USER_CODE void explorer_handle_pointer_dblclick(user_explorer_state_t* st
 
     if (!state || state->modal_mode != USER_EXPLORER_MODAL_NONE) return;
     sidebar_w = explorer_sidebar_width(state->render_w);
-    content_x = sidebar_w + 12;
-    content_w = state->render_w - sidebar_w - 12;
+    content_x = EXPLORER_MARGIN + sidebar_w + EXPLORER_PANEL_GAP;
+    content_w = state->render_w - content_x - EXPLORER_MARGIN;
     if (local_x < content_x + 16 || local_x > content_x + content_w - 16) return;
     row = explorer_row_from_local_y(state, local_y);
     child_idx = explorer_child_idx_for_row(state->current_dir, row);

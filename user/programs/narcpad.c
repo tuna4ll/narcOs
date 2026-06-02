@@ -8,6 +8,7 @@
 
 static user_narcpad_state_t app_state;
 static size_t app_surface_capacity_pixels;
+static int app_suppress_next_save_char;
 
 static int app_resize_surface(int window_id, user_narcpad_state_t* state) {
     gui_window_info_t info;
@@ -77,10 +78,16 @@ static void app_handle_gui_event(user_narcpad_state_t* state, const gui_window_e
     switch (event->type) {
         case GUI_WIN_EVT_KEY_DOWN:
             if ((event->arg2 & 2) != 0 && event->arg0 == 0x1F) {
+                app_suppress_next_save_char = 1;
                 app_queue_event(state, USER_NARCPAD_EVT_SAVE, 0);
             }
             break;
         case GUI_WIN_EVT_CHAR:
+            if (app_suppress_next_save_char && (event->arg0 == 's' || event->arg0 == 'S')) {
+                app_suppress_next_save_char = 0;
+                break;
+            }
+            app_suppress_next_save_char = 0;
             if (event->arg0 == '\b') app_queue_event(state, USER_NARCPAD_EVT_BACKSPACE, 0);
             else if (event->arg0 == '\n') app_queue_event(state, USER_NARCPAD_EVT_NEWLINE, 0);
             else if (event->arg0 != 0) app_queue_event(state, USER_NARCPAD_EVT_CHAR, event->arg0);

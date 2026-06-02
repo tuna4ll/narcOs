@@ -94,8 +94,8 @@ int main(int argc, char** argv) {
     params.flags = 0;
     params.x = -1;
     params.y = -1;
-    params.width = 980;
-    params.height = 650;
+    params.width = 760;
+    params.height = 520;
     window_id = user_gui_create_window(&params);
     if (window_id < 0) return 1;
     (void)user_gui_set_title(window_id, "Explorer");
