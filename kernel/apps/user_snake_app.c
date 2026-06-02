@@ -6,8 +6,8 @@
 
 #define USER_CODE __attribute__((section(".user_code")))
 
-#define UI_GLYPH_W       7
-#define UI_GLYPH_ADVANCE 7
+#define UI_GLYPH_W       8
+#define UI_GLYPH_ADVANCE 8
 
 static USER_CODE uint32_t snake_mix_color(uint32_t c1, uint32_t c2, int alpha) {
     uint32_t rb1;
@@ -219,15 +219,37 @@ static USER_CODE const unsigned char* snake_get_glyph(char c) {
     return fallback;
 }
 
+static USER_CODE int snake_glyph_bit(const unsigned char* glyph, int row, int col) {
+    if (!glyph || row < 0 || row >= 8 || col < 0 || col >= UI_GLYPH_W) return 0;
+    return (glyph[row] & (1U << (7 - col))) != 0U;
+}
+
+static USER_CODE int snake_glyph_alpha(const unsigned char* glyph, int row, int col) {
+    int direct = 0;
+    int diagonal = 0;
+
+    if (snake_glyph_bit(glyph, row, col)) return 255;
+    for (int oy = -1; oy <= 1; oy++) {
+        for (int ox = -1; ox <= 1; ox++) {
+            if (ox == 0 && oy == 0) continue;
+            if (!snake_glyph_bit(glyph, row + oy, col + ox)) continue;
+            if (ox == 0 || oy == 0) direct++;
+            else diagonal++;
+        }
+    }
+    if (direct == 0 && diagonal == 0) return 0;
+    return direct * 44 + diagonal * 20;
+}
+
 static USER_CODE void snake_draw_char(user_snake_state_t* state, int x, int y, char c, uint32_t color) {
     const unsigned char* glyph = snake_get_glyph(c);
 
     if (!state) return;
-    for (int row = 0; row < 8; row++) {
-        for (int col = 0; col < UI_GLYPH_W; col++) {
-            if ((glyph[row] & (1U << (7 - col))) != 0U) {
-                snake_put_pixel_alpha(state, x + col, y + row, color, 255);
-            }
+    for (int row = -1; row <= 8; row++) {
+        for (int col = -1; col <= UI_GLYPH_W; col++) {
+            int alpha = snake_glyph_alpha(glyph, row, col);
+
+            if (alpha > 0) snake_put_pixel_alpha(state, x + col, y + row, color, alpha);
         }
     }
 }

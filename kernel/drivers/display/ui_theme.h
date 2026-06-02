@@ -23,12 +23,12 @@
 #define UI_TASKBAR_ITEM_H     25
 #define UI_TASKBAR_GAP        6
 
-#define UI_WINDOW_TITLEBAR_H  29
-#define UI_WINDOW_CLIENT_TOP  34
+#define UI_WINDOW_TITLEBAR_H  32
+#define UI_WINDOW_CLIENT_TOP  38
 #define UI_WINDOW_EDGE_SIZE   6
-#define UI_WINDOW_CTRL_SIZE   12
+#define UI_WINDOW_CTRL_SIZE   15
 #define UI_WINDOW_CTRL_GAP    6
-#define UI_WINDOW_CTRL_TOP    8
+#define UI_WINDOW_CTRL_TOP    7
 #define UI_WINDOW_CTRL_PAD_R  10
 
 #define UI_MENU_ITEM_H        36

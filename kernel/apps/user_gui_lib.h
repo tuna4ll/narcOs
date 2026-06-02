@@ -451,13 +451,30 @@ static USER_CODE __attribute__((unused)) void user_gui_draw_rgba_bitmap_scaled(u
                                                                               int x, int y, int size) {
     if (!surface || !rgba || src_w <= 0 || src_h <= 0 || size <= 0) return;
     for (int dy = 0; dy < size; dy++) {
-        int sy = (dy * src_h) / size;
+        int sy_fp = size > 1 ? (dy * (src_h - 1) * 256) / (size - 1) : 0;
+        int sy = sy_fp >> 8;
+        int sy1 = sy + 1 < src_h ? sy + 1 : sy;
+        int fy = sy_fp & 255;
         for (int dx = 0; dx < size; dx++) {
-            int sx = (dx * src_w) / size;
-            const uint8_t* px = rgba + (((size_t)sy * (size_t)src_w) + (size_t)sx) * 4U;
-            uint32_t color = ((uint32_t)px[0] << 16) | ((uint32_t)px[1] << 8) | (uint32_t)px[2];
+            int sx_fp = size > 1 ? (dx * (src_w - 1) * 256) / (size - 1) : 0;
+            int sx = sx_fp >> 8;
+            int sx1 = sx + 1 < src_w ? sx + 1 : sx;
+            int fx = sx_fp & 255;
+            const uint8_t* p00 = rgba + (((size_t)sy * (size_t)src_w) + (size_t)sx) * 4U;
+            const uint8_t* p10 = rgba + (((size_t)sy * (size_t)src_w) + (size_t)sx1) * 4U;
+            const uint8_t* p01 = rgba + (((size_t)sy1 * (size_t)src_w) + (size_t)sx) * 4U;
+            const uint8_t* p11 = rgba + (((size_t)sy1 * (size_t)src_w) + (size_t)sx1) * 4U;
+            int wx00 = (256 - fx) * (256 - fy);
+            int wx10 = fx * (256 - fy);
+            int wx01 = (256 - fx) * fy;
+            int wx11 = fx * fy;
+            int r = (p00[0] * wx00 + p10[0] * wx10 + p01[0] * wx01 + p11[0] * wx11) >> 16;
+            int g = (p00[1] * wx00 + p10[1] * wx10 + p01[1] * wx01 + p11[1] * wx11) >> 16;
+            int b = (p00[2] * wx00 + p10[2] * wx10 + p01[2] * wx01 + p11[2] * wx11) >> 16;
+            int a = (p00[3] * wx00 + p10[3] * wx10 + p01[3] * wx01 + p11[3] * wx11) >> 16;
+            uint32_t color = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 
-            if (px[3] != 0U) user_gui_put_pixel_alpha(surface, x + dx, y + dy, color, px[3]);
+            if (a > 0) user_gui_put_pixel_alpha(surface, x + dx, y + dy, color, a);
         }
     }
 }

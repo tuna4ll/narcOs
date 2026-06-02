@@ -192,9 +192,6 @@ static int start_menu_height(void);
 static int start_menu_item_y(int item_idx);
 static void draw_string_clipped(user_gui_surface_t* surface, int x, int y, const char* text, uint32_t color,
                                 int clip_x, int clip_y, int clip_w, int clip_h);
-static void draw_tall_string_clipped(user_gui_surface_t* surface, int x, int y, const char* text,
-                                     uint32_t color, uint32_t shadow,
-                                     int clip_x, int clip_y, int clip_w, int clip_h);
 static void copy_text_ellipsized(char* dst, size_t dst_size, const char* src, int max_px);
 static void copy_icon_label(char* dst, size_t dst_size, const char* src);
 static void desktop_icon_rect(int slot, int screen_w, int screen_h, int* out_x, int* out_y);
@@ -204,6 +201,7 @@ static void format_rate_short(char* out, uint32_t bytes_per_sec);
 static void draw_taskbar_network_panel(user_gui_surface_t* surface, int x, int y, int w, int h);
 static int rects_intersect(int ax, int ay, int aw, int ah, int bx, int by, int bw, int bh);
 static int desktop_launch_is_throttled(int key, const char* path);
+static const uint8_t* desktop_bitmap_icon_for_user_gui_icon(int icon);
 
 static void draw_surface_preview_clipped(user_gui_surface_t* dst, int x, int y, int w, int h,
                                          const uint32_t* src, int src_w, int src_h,
@@ -400,28 +398,107 @@ static void draw_window_control_button(user_gui_surface_t* surface, int x, int y
 
     if (!surface) return;
     switch (control) {
-        case WINDOW_CTRL_CLOSE: base = active ? 0xD2645F : 0x555E68; break;
-        default: base = active ? 0xE3E8ED : 0x555E68; break;
+        case WINDOW_CTRL_CLOSE: base = active ? 0xD76A65 : 0x4C555E; break;
+        default: base = active ? 0xDFE7ED : 0x4C555E; break;
     }
-    border = active ? mix_color(UI_HILITE_SOFT, base, 58) : 0x3D454E;
+    border = active ? mix_color(UI_HILITE_SOFT, base, 74) : 0x39424B;
     glyph = active ? UI_TEXT_DARK : UI_TEXT_MUTED;
 
-    user_gui_draw_rounded_rect(surface, x, y, s, s, 3, border, 255);
-    fill_vertical_gradient_rounded(surface, x + 1, y + 1, s - 2, s - 2, 2,
-                                   mix_color(UI_HILITE_SOFT, base, active ? 72 : 28), base);
-    user_gui_fill_rect_alpha(surface, x + 2, y + s - 2, s - 4, 1, UI_SHADOW, active ? 46 : 70);
+    user_gui_draw_rounded_rect(surface, x, y, s, s, 5, border, active ? 245 : 210);
+    fill_vertical_gradient_rounded(surface, x + 1, y + 1, s - 2, s - 2, 4,
+                                   mix_color(UI_HILITE_SOFT, base, active ? 82 : 30), base);
+    user_gui_fill_rect_alpha(surface, x + 3, y + 2, s - 6, 1, UI_HILITE_SOFT, active ? 88 : 38);
+    user_gui_fill_rect_alpha(surface, x + 2, y + s - 2, s - 4, 1, UI_SHADOW, active ? 42 : 70);
 
     if (control == WINDOW_CTRL_MINIMIZE) {
-        user_gui_fill_rect(surface, x + 3, y + s - 4, s - 6, 2, glyph);
+        user_gui_fill_rect(surface, x + 4, y + s - 5, s - 8, 2, glyph);
     } else if (control == WINDOW_CTRL_MAXIMIZE) {
-        user_gui_draw_rect(surface, x + 3, y + 3, s - 6, s - 6, glyph);
-        user_gui_fill_rect_alpha(surface, x + 4, y + 4, s - 8, 1, glyph, 150);
+        user_gui_draw_rect(surface, x + 4, y + 4, s - 8, s - 8, glyph);
+        user_gui_fill_rect_alpha(surface, x + 5, y + 5, s - 10, 1, glyph, 150);
     } else if (control == WINDOW_CTRL_CLOSE) {
-        for (int i = 0; i < s - 6; i++) {
-            user_gui_fill_rect(surface, x + 3 + i, y + 3 + i, 2, 2, glyph);
-            user_gui_fill_rect(surface, x + s - 4 - i, y + 3 + i, 2, 2, glyph);
+        for (int i = 0; i < s - 8; i++) {
+            user_gui_fill_rect_alpha(surface, x + 4 + i, y + 4 + i, 2, 2, glyph, 235);
+            user_gui_fill_rect_alpha(surface, x + s - 5 - i, y + 4 + i, 2, 2, glyph, 235);
         }
     }
+}
+
+static int window_icon_for_title(const char* title) {
+    if (!title || title[0] == '\0') return USER_GUI_ICON_APP;
+    if (title[0] == 'E') return USER_GUI_ICON_EXPLORER;
+    if (title[0] == 'S' && title[1] == 'e') return USER_GUI_ICON_SETTINGS;
+    if (title[0] == 'S' && title[1] == 'n') return USER_GUI_ICON_SNAKE;
+    if (title[0] == 'D') return USER_GUI_ICON_DOOM;
+    if (title[0] == 'N') return USER_GUI_ICON_NARCPAD;
+    return USER_GUI_ICON_APP;
+}
+
+static void draw_window_title_text(user_gui_surface_t* surface, int x, int y, int max_w,
+                                   const char* title, uint32_t color,
+                                   int clip_x, int clip_y, int clip_w, int clip_h) {
+    char title_buf[32];
+
+    if (!surface || max_w <= 0 || !title) return;
+    copy_text_ellipsized(title_buf, sizeof(title_buf), title, max_w);
+    draw_string_clipped(surface, x + 1, y + 1, title_buf, UI_SHADOW, clip_x, clip_y, clip_w, clip_h);
+    draw_string_clipped(surface, x, y, title_buf, color, clip_x, clip_y, clip_w, clip_h);
+}
+
+static void draw_window_titlebar(user_gui_surface_t* surface, const gui_window_snapshot_entry_t* win, int active,
+                                 int clip_x, int clip_y, int clip_w, int clip_h) {
+    int x;
+    int y;
+    int w;
+    int close_x;
+    int max_x;
+    int min_x;
+    int title_x;
+    int title_w;
+    int icon_kind;
+    const uint8_t* bitmap_icon;
+    uint32_t title_top;
+    uint32_t title_bottom;
+    uint32_t title_text;
+
+    if (!surface || !win) return;
+    x = win->x;
+    y = win->y;
+    w = win->width;
+    close_x = x + w - WINDOW_CTRL_RIGHT_PAD - WINDOW_CTRL_SIZE;
+    max_x = close_x - WINDOW_CTRL_GAP - WINDOW_CTRL_SIZE;
+    min_x = max_x - WINDOW_CTRL_GAP - WINDOW_CTRL_SIZE;
+    title_x = x + 38;
+    title_w = min_x - title_x - 10;
+    if (title_w < 0) title_w = 0;
+    icon_kind = window_icon_for_title(win->title);
+    bitmap_icon = desktop_bitmap_icon_for_user_gui_icon(icon_kind);
+    title_top = active ? 0x394A59 : 0x343B43;
+    title_bottom = active ? 0x242F3A : 0x252B32;
+    title_text = active ? UI_TEXT : UI_TEXT_MUTED;
+
+    fill_vertical_gradient_top_rounded(surface, x + 1, y + 1, w - 2, WINDOW_CLIENT_TOP - 2,
+                                       UI_RADIUS_MD > 1 ? UI_RADIUS_MD - 1 : UI_RADIUS_MD,
+                                       title_top, title_bottom);
+    user_gui_fill_rect_alpha(surface, x + 2, y + 2, w - 4, 1, UI_HILITE_SOFT, active ? 46 : 20);
+    user_gui_fill_rect_alpha(surface, x + 1, y + WINDOW_CLIENT_TOP - 3, w - 2, 1,
+                             active ? UI_ACCENT_ALT : UI_BORDER_SOFT, active ? 150 : 95);
+    user_gui_draw_rounded_rect(surface, x + 12, y + 8, 20, 20, 6,
+                               active ? 0x1A2530 : 0x20272F, 235);
+    user_gui_draw_rounded_rect(surface, x + 12, y + 8, 20, 20, 6,
+                               active ? UI_ACCENT_ALT : UI_BORDER_SOFT, active ? 165 : 110);
+    if (bitmap_icon) {
+        user_gui_draw_rgba_bitmap_scaled(surface, bitmap_icon,
+                                         DESKTOP_FOLDER_ICON_W, DESKTOP_FOLDER_ICON_H,
+                                         x + 14, y + 10, 16);
+    } else {
+        user_gui_draw_icon(surface, icon_kind, x + 14, y + 10, 16,
+                           active ? UI_ACCENT_ALT : UI_TEXT_SUBTLE, active);
+    }
+    draw_window_title_text(surface, title_x, y + 13, title_w, win->title, title_text,
+                           clip_x, clip_y, clip_w, clip_h);
+    draw_window_control_button(surface, min_x, y + WINDOW_CTRL_TOP, WINDOW_CTRL_MINIMIZE, active);
+    draw_window_control_button(surface, max_x, y + WINDOW_CTRL_TOP, WINDOW_CTRL_MAXIMIZE, active);
+    draw_window_control_button(surface, close_x, y + WINDOW_CTRL_TOP, WINDOW_CTRL_CLOSE, active);
 }
 
 static int desktop_icon_to_user_gui_icon(int kind) {
@@ -545,31 +622,10 @@ static void draw_window_surface_card(user_gui_surface_t* surface, const gui_wind
         int active = (win->flags & GUI_WINDOW_SNAPSHOT_ACTIVE) != 0U;
         uint32_t top_fill = active ? UI_WINDOW_ACTIVE_TOP : UI_WINDOW_INACTIVE_TOP;
         uint32_t bottom_fill = active ? UI_WINDOW_ACTIVE_BOTTOM : UI_WINDOW_INACTIVE_BOTTOM;
-        uint32_t title_top = active ? UI_WINDOW_ACTIVE_TOP : UI_WINDOW_INACTIVE_TOP;
-        uint32_t title_bottom = active ? UI_WINDOW_ACTIVE_BOTTOM : UI_WINDOW_INACTIVE_BOTTOM;
-        uint32_t title_text = active ? UI_TEXT : UI_TEXT_MUTED;
 
         draw_panel_elevated(surface, x, y, w, h, UI_RADIUS_MD, top_fill, bottom_fill,
                             active ? UI_BORDER_STRONG : UI_BORDER_SOFT, 0U);
-        fill_vertical_gradient_top_rounded(surface, x + 1, y + 1, w - 2, WINDOW_CLIENT_TOP - 2,
-                                           UI_RADIUS_MD > 1 ? UI_RADIUS_MD - 1 : UI_RADIUS_MD,
-                                           title_top, title_bottom);
-        user_gui_fill_rect_alpha(surface, x + 2, y + 2, w - 4, 1, UI_HILITE_SOFT, active ? 64 : 24);
-        user_gui_fill_rect_alpha(surface, x + 1, y + WINDOW_CLIENT_TOP - 3, w - 2, 1,
-                                 active ? 0x173E5E : UI_BORDER_SOFT, active ? 210 : 120);
-        user_gui_draw_rounded_rect(surface, x + 12, y + 10, 6, 10, 2,
-                                   active ? 0xD7EAF8 : UI_BORDER_STRONG, active ? 235 : 165);
-        draw_tall_string_clipped(surface, x + 24, y + 8, win->title, title_text, UI_SHADOW,
-                                 clip_x, clip_y, clip_w, clip_h);
-        {
-            int close_x = x + w - WINDOW_CTRL_RIGHT_PAD - WINDOW_CTRL_SIZE;
-            int max_x = close_x - WINDOW_CTRL_GAP - WINDOW_CTRL_SIZE;
-            int min_x = max_x - WINDOW_CTRL_GAP - WINDOW_CTRL_SIZE;
-
-            draw_window_control_button(surface, min_x, y + WINDOW_CTRL_TOP, WINDOW_CTRL_MINIMIZE, active);
-            draw_window_control_button(surface, max_x, y + WINDOW_CTRL_TOP, WINDOW_CTRL_MAXIMIZE, active);
-            draw_window_control_button(surface, close_x, y + WINDOW_CTRL_TOP, WINDOW_CTRL_CLOSE, active);
-        }
+        draw_window_titlebar(surface, win, active, clip_x, clip_y, clip_w, clip_h);
         client_x = x + WINDOW_CLIENT_INSET_X;
         client_y = y + WINDOW_CLIENT_TOP;
         client_w = w - WINDOW_CLIENT_INSET_X * 2;
@@ -786,17 +842,6 @@ static void draw_string_clipped(user_gui_surface_t* surface, int x, int y, const
     text_w = text_length(text) * 8;
     if (!rects_intersect(x - 1, y - 1, text_w + 2, 10, clip_x, clip_y, clip_w, clip_h)) return;
     user_gui_draw_string(surface, x, y, text, color);
-}
-
-static void draw_tall_string_clipped(user_gui_surface_t* surface, int x, int y, const char* text,
-                                     uint32_t color, uint32_t shadow,
-                                     int clip_x, int clip_y, int clip_w, int clip_h) {
-    int text_w;
-
-    if (!surface || !text || text[0] == '\0' || clip_w <= 0 || clip_h <= 0) return;
-    text_w = text_length(text) * 9;
-    if (!rects_intersect(x - 1, y - 1, text_w + 3, 18, clip_x, clip_y, clip_w, clip_h)) return;
-    user_gui_draw_string_tall_shadow(surface, x, y, text, color, shadow);
 }
 
 static void copy_icon_label(char* dst, size_t dst_size, const char* src) {

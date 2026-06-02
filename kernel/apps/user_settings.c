@@ -159,27 +159,27 @@ static USER_CODE void draw_panel(user_gui_surface_t* surface, settings_rect_t re
     if (rect.w > 24) user_gui_fill_rect_alpha(surface, rect.x + 12, rect.y + 1, rect.w - 24, 1, UI_HILITE_SOFT, 36);
 }
 
-static USER_CODE void draw_char_scaled(user_gui_surface_t* surface, int x, int y, char c, int scale, uint32_t color) {
-    const unsigned char* glyph;
-
-    if (!surface || scale <= 0) return;
-    glyph = user_gui_font[(uint8_t)c];
-    for (int row = 0; row < 8; row++) {
-        for (int col = 0; col < 8; col++) {
-            if ((glyph[row] & (1U << (7 - col))) == 0U) continue;
-            user_gui_fill_rect(surface, x + col * scale, y + row * scale, scale, scale, color);
-        }
-    }
-}
-
 static USER_CODE void draw_string_scaled(user_gui_surface_t* surface, int x, int y,
                                          const char* text, int scale, uint32_t color) {
     if (!surface || !text || scale <= 0) return;
+    if (scale >= 2) {
+        user_gui_draw_string_tall(surface, x, y, text, color);
+        return;
+    }
     while (*text) {
-        draw_char_scaled(surface, x, y, *text, scale, color);
-        x += 8 * scale;
+        user_gui_draw_char(surface, x, y, *text, color);
+        x += 8;
         text++;
     }
+}
+
+static USER_CODE int scaled_text_width(const char* text, int scale) {
+    if (scale >= 2) return text_len(text) * 9;
+    return text_len(text) * 8;
+}
+
+static USER_CODE int scaled_text_height(int scale) {
+    return scale >= 2 ? 18 : 10;
 }
 
 static USER_CODE void copy_text_ellipsized_local(char* dst, int dst_len, const char* src, int max_px) {
@@ -235,10 +235,10 @@ static USER_CODE void draw_button(user_gui_surface_t* surface, settings_rect_t r
     draw_panel(surface, rect, top, bottom, border);
     if (scale < 1) scale = 1;
     copy_text_ellipsized_local(clipped, (int)sizeof(clipped), label, rect.w - 16);
-    label_w = text_len(clipped) * 8 * scale;
+    label_w = scaled_text_width(clipped, scale);
     tx = rect.x + (rect.w - label_w) / 2;
     if (tx < rect.x + 8) tx = rect.x + 8;
-    ty = rect.y + (rect.h - (8 * scale)) / 2;
+    ty = rect.y + (rect.h - scaled_text_height(scale)) / 2;
     if (scale == 1) user_gui_draw_string(surface, tx, ty, clipped, text);
     else draw_string_scaled(surface, tx, ty, clipped, scale, text);
 }
