@@ -466,17 +466,14 @@ static int parse_fetch_args(const char* args, char* host, int host_len,
     if (token_count == 2) {
         if (strncmp(token0, "https://", 8) == 0 && out_use_https) *out_use_https = 1U;
         if (parse_http_target(token0, host, host_len, path, path_len) != 0) return -1;
-        strncpy(output_path, token1, (size_t)(output_path_len - 1));
-        output_path[output_path_len - 1] = '\0';
+        snprintf(output_path, (size_t)output_path_len, "%s", token1);
         return 0;
     }
     if (token_count == 3) {
         if (strncmp(token0, "https://", 8) == 0 && out_use_https) *out_use_https = 1U;
         if (parse_host_only(token0, host, host_len) != 0) return -1;
-        strncpy(path, token1, (size_t)(path_len - 1));
-        path[path_len - 1] = '\0';
-        strncpy(output_path, token2, (size_t)(output_path_len - 1));
-        output_path[output_path_len - 1] = '\0';
+        snprintf(path, (size_t)path_len, "%s", token1);
+        snprintf(output_path, (size_t)output_path_len, "%s", token2);
         if (path[0] != '/') return -1;
         return 0;
     }
@@ -714,7 +711,11 @@ int run_user_https_command(const char* target) {
 
 int run_user_fetch(const char* args) {
     int status;
+    process_t* caller = process_current();
 
+    if (caller != NULL && caller->kind == PROCESS_KIND_USER) {
+        return -1;
+    }
     memset(&user_fetch_state, 0, sizeof(user_fetch_state));
     if (parse_fetch_args(args,
                          user_fetch_state.host, sizeof(user_fetch_state.host),
