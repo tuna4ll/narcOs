@@ -33,10 +33,12 @@ extern int keyboard_deliver_desktop_input(uint8_t scancode, int modifiers);
 extern int terminal_alloc_session(void);
 extern void terminal_bind_window(int session_id, int window_id);
 extern void terminal_reset_session(int session_id);
+extern void terminal_release_session(int session_id);
 extern void terminal_select_output(int session_id);
 extern void terminal_select_render(int session_id);
 extern int terminal_command_ready(int session_id);
 extern int terminal_take_command(int session_id, char* out, uint32_t out_size);
+extern void terminal_reset_input_session(int session_id);
 extern void init_keyboard();
 extern disk_fs_node_t dir_cache[MAX_FILES];
 extern int current_dir_index;
@@ -864,6 +866,34 @@ static int nwm_create_terminal_window(void) {
     return window_id;
 }
 
+static void nwm_destroy_terminal_window_idx(int idx) {
+    int session_id;
+    int was_active;
+
+    if (idx <= 0 || idx >= window_count || windows[idx].type != WIN_TYPE_TERMINAL) return;
+    if (windows[idx].id == input_capture_window_id) nwm_clear_input_capture(0);
+    session_id = windows[idx].terminal_session_id;
+    if (session_id >= 0 && session_id < MAX_TERMINALS) {
+        terminal_release_session(session_id);
+        terminal_reset_input_session(session_id);
+        terminal_cwd_index[session_id] = -1;
+    }
+    was_active = idx == active_window_idx;
+    for (int i = idx; i < window_count - 1; i++) {
+        windows[i] = windows[i + 1];
+    }
+    memset(&windows[window_count - 1], 0, sizeof(windows[window_count - 1]));
+    window_count--;
+    if (window_count < 0) window_count = 0;
+    if (was_active) {
+        active_window_idx = nwm_pick_active_window_idx();
+    } else if (active_window_idx > idx) {
+        active_window_idx--;
+    } else if (active_window_idx >= window_count) {
+        active_window_idx = nwm_pick_active_window_idx();
+    }
+}
+
 int nwm_desktop_window_action(int owner_pid, const gui_desktop_window_action_t* action) {
     int idx;
     int old_w;
@@ -921,6 +951,8 @@ int nwm_desktop_window_action(int owner_pid, const gui_desktop_window_action_t* 
             gui_mark_window_dirty(&windows[idx]);
             if (windows[idx].type == WIN_TYPE_USER) {
                 (void)nwm_queue_window_event_idx(idx, GUI_WIN_EVT_CLOSE_REQUEST, 0, 0, 0);
+            } else if (windows[idx].type == WIN_TYPE_TERMINAL) {
+                nwm_destroy_terminal_window_idx(idx);
             } else {
                 windows[idx].visible = 0;
                 active_window_idx = nwm_pick_active_window_idx();

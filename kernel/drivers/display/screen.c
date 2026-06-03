@@ -170,6 +170,16 @@ void terminal_reset_session(int session_id) {
     terminal_session_reset(&terminal_sessions[session_id]);
 }
 
+void terminal_release_session(int session_id) {
+    if (session_id < 0 || session_id >= MAX_TERMINALS) return;
+    terminal_session_reset(&terminal_sessions[session_id]);
+    terminal_sessions[session_id].allocated = 0;
+    terminal_sessions[session_id].window_id = -1;
+    if (terminal_output_session_id == session_id) terminal_output_session_id = 0;
+    if (terminal_render_session_id == session_id) terminal_render_session_id = terminal_output_session_id;
+    if (terminal_buffer_session_id == session_id) terminal_buffer_session_id = -1;
+}
+
 static void vga_request_window_refresh(int throttled) {
     int was_dirty = vga_window_dirty;
 

@@ -28,6 +28,22 @@ typedef struct {
 static terminal_input_state_t terminal_inputs[MAX_TERMINALS];
 static int terminal_input_session_id = 0;
 
+static void terminal_input_reset_state(int session_id) {
+    if (session_id < 0 || session_id >= MAX_TERMINALS) return;
+    terminal_inputs[session_id].in_pos = 0;
+    terminal_inputs[session_id].pending = 0;
+    terminal_inputs[session_id].hist_count = 0;
+    terminal_inputs[session_id].hist_current_idx = -1;
+    terminal_inputs[session_id].hist_write_idx = 0;
+    for (int i = 0; i < INPUT_BUF_SIZE; i++) {
+        terminal_inputs[session_id].in_buf[i] = 0;
+        terminal_inputs[session_id].pending_command[i] = 0;
+    }
+    for (int h = 0; h < HISTORY_MAX; h++) {
+        for (int i = 0; i < INPUT_BUF_SIZE; i++) terminal_inputs[session_id].hist[h][i] = 0;
+    }
+}
+
 static terminal_input_state_t* terminal_input_current(void) {
     if (terminal_input_session_id < 0 || terminal_input_session_id >= MAX_TERMINALS) terminal_input_session_id = 0;
     return &terminal_inputs[terminal_input_session_id];
@@ -130,18 +146,7 @@ static void console_input_enqueue_line(const char* text) {
 void init_keyboard()
 {
     for (int t = 0; t < MAX_TERMINALS; t++) {
-        terminal_inputs[t].in_pos = 0;
-        terminal_inputs[t].pending = 0;
-        terminal_inputs[t].hist_count = 0;
-        terminal_inputs[t].hist_current_idx = -1;
-        terminal_inputs[t].hist_write_idx = 0;
-        for (int i = 0; i < INPUT_BUF_SIZE; i++) {
-            terminal_inputs[t].in_buf[i] = 0;
-            terminal_inputs[t].pending_command[i] = 0;
-        }
-        for (int h = 0; h < HISTORY_MAX; h++) {
-            for (int i = 0; i < INPUT_BUF_SIZE; i++) terminal_inputs[t].hist[h][i] = 0;
-        }
+        terminal_input_reset_state(t);
     }
     terminal_input_session_id = 0;
     console_input_head = 0;
@@ -226,6 +231,11 @@ int terminal_take_command(int session_id, char* out, uint32_t out_size) {
     out[i] = '\0';
     state->pending = 0;
     return 0;
+}
+
+void terminal_reset_input_session(int session_id) {
+    terminal_input_reset_state(session_id);
+    if (terminal_input_session_id == session_id) terminal_input_session_id = 0;
 }
 
 static void set_input_line(const char* text) {
