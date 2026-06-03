@@ -430,6 +430,7 @@ static int window_icon_for_title(const char* title) {
     if (title[0] == 'S' && title[1] == 'n') return USER_GUI_ICON_SNAKE;
     if (title[0] == 'D') return USER_GUI_ICON_DOOM;
     if (title[0] == 'N') return USER_GUI_ICON_NARCPAD;
+    if (title[0] == 'T') return USER_GUI_ICON_TERMINAL;
     return USER_GUI_ICON_APP;
 }
 
@@ -1609,7 +1610,7 @@ static void launch_terminal_action(char* status_text, size_t status_size) {
 
     action.size = sizeof(action);
     action.window_id = 0;
-    action.action = GUI_DESKTOP_WINDOW_FOCUS;
+    action.action = GUI_DESKTOP_WINDOW_CREATE_TERMINAL;
     action.x = 0;
     action.y = 0;
     action.width = 0;
@@ -1619,7 +1620,7 @@ static void launch_terminal_action(char* status_text, size_t status_size) {
     action.event_arg1 = 0;
     action.event_arg2 = 0;
     rc = user_gui_desktop_window_action(&action);
-    copy_text(status_text, status_size, rc == 0 ? "Terminal focused" : "Terminal focus failed");
+    copy_text(status_text, status_size, rc >= 0 ? "Terminal opened" : "Terminal open failed");
 }
 
 static void refresh_window_list(gui_window_snapshot_entry_t* entries, int* out_count) {
@@ -2320,6 +2321,7 @@ int main(void) {
     int last_click_window_id = -1;
     int last_click_button = 0;
     int last_desktop_icon = -1;
+    int terminal_button_down = 0;
     int preferred_input_window_id = -1;
     int event_from_desktop = 0;
     int surface_cache_dirty = 1;
@@ -2703,7 +2705,10 @@ int main(void) {
                                point_in_rect(mouse_x, mouse_y,
                                              START_BUTTON_X + START_BUTTON_W + 10, START_BUTTON_Y,
                                              APP_BUTTON_W, START_BUTTON_H)) {
-                        launch_terminal_action(status_text, sizeof(status_text));
+                        if (!terminal_button_down) {
+                            terminal_button_down = 1;
+                            launch_terminal_action(status_text, sizeof(status_text));
+                        }
                         refresh_window_list(window_entries, &tracked_window_count);
                         surface_cache_dirty = 1;
                         mark_all_window_caches_dirty(surface_cache_flags, TASK_SLOT_MAX);
@@ -2921,6 +2926,7 @@ int main(void) {
                 if (event_from_desktop && event.arg2 == 0) {
                     mouse_x = event.arg0;
                     mouse_y = event.arg1;
+                    terminal_button_down = 0;
                     int hit_idx = hit_test_window(window_entries, tracked_window_count, mouse_x, mouse_y);
                     int was_dragging = drag_window_id >= 0;
                     int was_resizing = resize_window_id >= 0;

@@ -1708,10 +1708,15 @@ setup_page_tables:
     mov dword [PDPT_BASE + 0], PD_BASE | PAGE_PRESENT_RW
     mov dword [PDPT_BASE + 4], 0
 
-    mov dword [PD_BASE + 0], 0x00000000 | PAGE_LARGE_RW
-    mov dword [PD_BASE + 4], 0
-    mov dword [PD_BASE + 8], 0x00200000 | PAGE_LARGE_RW
-    mov dword [PD_BASE + 12], 0
+    mov edi, PD_BASE
+    mov eax, PAGE_LARGE_RW
+    mov ecx, 8
+.identity_map_loop:
+    mov dword [edi], eax
+    mov dword [edi + 4], 0
+    add eax, 0x00200000
+    add edi, 8
+    loop .identity_map_loop
     ret
 
 zero_elf_ranges32:

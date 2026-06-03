@@ -30,6 +30,13 @@ extern void vga_println(const char* str);
 extern void vga_print_int(int num);
 extern void vga_scrollback_lines(int direction);
 extern int keyboard_deliver_desktop_input(uint8_t scancode, int modifiers);
+extern int terminal_alloc_session(void);
+extern void terminal_bind_window(int session_id, int window_id);
+extern void terminal_reset_session(int session_id);
+extern void terminal_select_output(int session_id);
+extern void terminal_select_render(int session_id);
+extern int terminal_command_ready(int session_id);
+extern int terminal_take_command(int session_id, char* out, uint32_t out_size);
 extern void init_keyboard();
 extern disk_fs_node_t dir_cache[MAX_FILES];
 extern int current_dir_index;
@@ -129,6 +136,7 @@ static int desktop_owner_pid = 0;
 static int input_capture_window_id = -1;
 static int input_capture_owner_pid = 0;
 static uint32_t input_capture_flags = 0;
+static int terminal_cwd_index[MAX_TERMINALS];
 static uint16_t desktop_event_head = 0;
 static uint16_t desktop_event_tail = 0;
 static gui_window_event_t desktop_event_queue[WINDOW_EVENT_QUEUE_CAP];
@@ -140,6 +148,8 @@ static int gui_dirty_y = 0;
 static int gui_dirty_w = 0;
 static int gui_dirty_h = 0;
 void nwm_bring_to_front(int idx);
+void print_prompt(void);
+static void print_gui_terminal_banner(void);
 
 char pad_title[32] = "NarcPad";
 volatile int snk_next_dir = -1;
@@ -700,17 +710,18 @@ int nwm_read_window_surface_for_desktop(int owner_pid, gui_window_surface_read_t
         extern int vga_get_window_w(void);
         extern int vga_get_window_h(void);
         extern int vga_window_needs_refresh(void);
-        extern void vga_refresh_window(void);
+        extern void vga_refresh_render_window_no_notify(void);
         extern void* vga_get_window_buffer(void);
 
-        if (vga_window_needs_refresh()) vga_refresh_window();
+        terminal_select_render(windows[idx].terminal_session_id);
+        if (vga_window_needs_refresh()) vga_refresh_render_window_no_notify();
         surface = (uint8_t*)vga_get_window_buffer();
         surface_w = (uint32_t)vga_get_window_w();
         surface_h = (uint32_t)vga_get_window_h();
         if (!surface || surface_w == 0U || surface_h == 0U) return -1;
         source_bpp_bytes = vbe_get_bpp() / 8U;
         if (source_bpp_bytes == 0U) return -1;
-        io->flags = GUI_WINDOW_SURFACE_FLAG_FULL_WINDOW;
+        io->flags = 0U;
     } else {
         return -1;
     }
@@ -807,12 +818,59 @@ int nwm_read_window_surface_for_desktop(int owner_pid, gui_window_surface_read_t
     return 0;
 }
 
+static int nwm_create_terminal_window(void) {
+    window_t* win;
+    int session_id;
+    int window_id;
+    int visible_terminals = 0;
+    int sw = (int)vbe_get_width();
+    int sh = (int)vbe_get_height();
+
+    if (window_count >= MAX_WINDOWS) return -1;
+    session_id = terminal_alloc_session();
+    if (session_id < 0) return -1;
+    win = &windows[window_count];
+    memset(win, 0, sizeof(*win));
+    win->type = WIN_TYPE_TERMINAL;
+    win->w = nwm_window_default_w(WIN_TYPE_TERMINAL, sw);
+    win->h = nwm_window_default_h(WIN_TYPE_TERMINAL, sh);
+    win->visible = 1;
+    win->minimized = 0;
+    win->id = next_user_window_id++;
+    win->terminal_session_id = session_id;
+    for (int i = 0; i < window_count; i++) {
+        if (windows[i].type == WIN_TYPE_TERMINAL && windows[i].visible) visible_terminals++;
+    }
+    strcpy(win->title, "Terminal");
+    if (visible_terminals > 0 && visible_terminals < 9) {
+        win->title[8] = ' ';
+        win->title[9] = (char)('1' + visible_terminals);
+        win->title[10] = '\0';
+    }
+    win->x = 28 + (visible_terminals * 28);
+    win->y = 44 + (visible_terminals * 24);
+    nwm_fit_window(win, 0);
+    window_id = win->id;
+    terminal_bind_window(session_id, window_id);
+    terminal_reset_session(session_id);
+    terminal_cwd_index[session_id] = current_dir_index;
+    window_count++;
+    terminal_select_output(session_id);
+    print_gui_terminal_banner();
+    print_prompt();
+    nwm_bring_to_front(window_count - 1);
+    gui_mark_dirty_full();
+    gui_needs_redraw = 1;
+    return window_id;
+}
+
 int nwm_desktop_window_action(int owner_pid, const gui_desktop_window_action_t* action) {
     int idx;
     int old_w;
     int old_h;
 
     if (owner_pid <= 0 || owner_pid != desktop_owner_pid || !action) return -1;
+    if (action->action == GUI_DESKTOP_WINDOW_CREATE_TERMINAL) return nwm_create_terminal_window();
     idx = nwm_get_idx_by_id(action->window_id);
     if (idx < 0) return -1;
     if (nwm_window_is_desktop_surface(&windows[idx])) return -1;
@@ -898,9 +956,13 @@ int nwm_desktop_window_action(int owner_pid, const gui_desktop_window_action_t* 
 void nwm_init_windows() {
     int sw = (int)vbe_get_width();
     int sh = (int)vbe_get_height();
+    int session_id;
 
     memset(windows, 0, sizeof(windows));
     active_window_idx = -1;
+    for (int i = 0; i < MAX_TERMINALS; i++) terminal_cwd_index[i] = current_dir_index;
+    session_id = terminal_alloc_session();
+    if (session_id < 0) session_id = 0;
 
     windows[0].type = WIN_TYPE_TERMINAL;
     windows[0].w = nwm_window_default_w(WIN_TYPE_TERMINAL, sw);
@@ -909,6 +971,7 @@ void nwm_init_windows() {
     windows[0].visible = 0;
     windows[0].minimized = 0;
     windows[0].id = 0;
+    windows[0].terminal_session_id = session_id;
     windows[0].client_surface = 0;
     windows[0].client_surface_w = 0;
     windows[0].client_surface_h = 0;
@@ -916,6 +979,8 @@ void nwm_init_windows() {
     windows[0].x = 28;
     windows[0].y = 44;
     nwm_fit_window(&windows[0], 0);
+    terminal_bind_window(session_id, windows[0].id);
+    terminal_cwd_index[session_id] = current_dir_index;
     window_count = 1;
 }
 
@@ -1366,6 +1431,7 @@ static int nwm_dispatch_kernel_window_input(int idx, uint32_t event_type, int ar
     (void)arg1;
 
     if (windows[idx].type == WIN_TYPE_TERMINAL) {
+        terminal_select_output(windows[idx].terminal_session_id);
         if (event_type == GUI_WIN_EVT_KEY_DOWN) return keyboard_deliver_desktop_input((uint8_t)arg0, arg2) ? 0 : -1;
         if (event_type == GUI_WIN_EVT_MOUSE_WHEEL) {
             vga_scrollback_lines(arg2 * 3);
@@ -2373,8 +2439,6 @@ void execute_command(char* cmd) {
     }
 }
 
-extern char cmd_to_execute[128];
-extern volatile int cmd_ready;
 extern int current_dir_index;
 extern void get_current_dir_name(char* buf);
 
@@ -2404,11 +2468,18 @@ static void print_gui_terminal_banner(void) {
 }
 
 static void console_process_main(void) {
+    char command[128];
+
     for (;;) {
-        if (cmd_ready) {
-            execute_command(cmd_to_execute);
-            cmd_ready = 0;
-            print_prompt();
+        for (int session_id = 0; session_id < MAX_TERMINALS; session_id++) {
+            if (terminal_command_ready(session_id) &&
+                terminal_take_command(session_id, command, sizeof(command)) == 0) {
+                terminal_select_output(session_id);
+                if (terminal_cwd_index[session_id] >= 0) current_dir_index = terminal_cwd_index[session_id];
+                execute_command(command);
+                terminal_cwd_index[session_id] = current_dir_index;
+                print_prompt();
+            }
         }
         process_poll();
         asm volatile("hlt");
@@ -2422,6 +2493,7 @@ static void console_process_entry(void* arg) {
 }
 
 static void graphics_process_main(void) {
+    char command[128];
     uint32_t last_clock_tick = timer_ticks;
     int last_mx = get_mouse_x();
     int last_my = get_mouse_y();
@@ -2465,12 +2537,17 @@ static void graphics_process_main(void) {
             }
         }
 
-        if (cmd_ready) {
-            execute_command(cmd_to_execute);
-            cmd_ready = 0;
-            print_prompt();
-            gui_mark_dirty_full();
-            gui_needs_redraw = 1;
+        for (int session_id = 0; session_id < MAX_TERMINALS; session_id++) {
+            if (terminal_command_ready(session_id) &&
+                terminal_take_command(session_id, command, sizeof(command)) == 0) {
+                terminal_select_output(session_id);
+                if (terminal_cwd_index[session_id] >= 0) current_dir_index = terminal_cwd_index[session_id];
+                execute_command(command);
+                terminal_cwd_index[session_id] = current_dir_index;
+                print_prompt();
+                gui_mark_dirty_full();
+                gui_needs_redraw = 1;
+            }
         }
         desktop_watchdog_tick();
         if (timer_ticks - last_clock_tick >= 100U) {

@@ -19,8 +19,8 @@
 #define TERM_WARN           UI_WARNING
 #define TERM_ERR            UI_DANGER
 
-#define TERM_CONTENT_X      24
-#define TERM_CONTENT_Y      46
+#define TERM_CONTENT_X      12
+#define TERM_CONTENT_Y      12
 #define TERM_CELL_W         7
 #define TERM_CELL_H         12
 #define TERM_CTRL_SIZE      12
@@ -45,22 +45,130 @@ typedef struct {
 static int win_x = 150;
 static int win_y = 120;
 int win_visible = 0;
-static int cursor_x = 0;
-static int cursor_y = 0;
 static int screen_graphics_enabled = 0;
-static int vga_window_dirty = 1;
-static int vga_last_window_w = 0;
-static int vga_last_window_h = 0;
-static uint32_t vga_last_refresh_request_tick = 0;
-/* Keep a longer terminal history so the window can scroll back. */
-static screen_char_t text_buffer[TERM_SCROLLBACK_LINES][TERM_MAX_COLS];
-static int term_line_count = 1;
-static int term_view_scroll = 0;
+
+typedef struct {
+    int allocated;
+    int window_id;
+    int cur_x;
+    int cur_y;
+    int dirty;
+    int last_window_w;
+    int last_window_h;
+    uint32_t last_refresh_request_tick;
+    screen_char_t cells[TERM_SCROLLBACK_LINES][TERM_MAX_COLS];
+    int line_count;
+    int view_scroll;
+    uint8_t ansi_fg;
+    int ansi_bold;
+    int ansi_state;
+    int ansi_params[TERM_ANSI_PARAM_MAX];
+    int ansi_param_count;
+    int ansi_param_value;
+    int ansi_param_has_value;
+} terminal_session_t;
+
+static terminal_session_t terminal_sessions[MAX_TERMINALS];
+static int terminal_output_session_id = 0;
+static int terminal_render_session_id = 0;
+static int terminal_buffer_session_id = -1;
 
 extern volatile uint32_t timer_ticks;
 extern window_t windows[MAX_WINDOWS];
 extern int nwm_get_idx_by_type(window_type_t type);
 extern void nwm_queue_desktop_event(uint16_t type, int16_t arg0, int16_t arg1, int32_t arg2);
+
+static terminal_session_t* term_session_by_id(int session_id) {
+    if (session_id < 0 || session_id >= MAX_TERMINALS) session_id = 0;
+    return &terminal_sessions[session_id];
+}
+
+static terminal_session_t* term_current(void) {
+    return term_session_by_id(terminal_output_session_id);
+}
+
+static terminal_session_t* term_render_current(void) {
+    return term_session_by_id(terminal_render_session_id);
+}
+
+#define cursor_x (term_current()->cur_x)
+#define cursor_y (term_current()->cur_y)
+#define vga_window_dirty (term_current()->dirty)
+#define vga_last_window_w (term_current()->last_window_w)
+#define vga_last_window_h (term_current()->last_window_h)
+#define vga_last_refresh_request_tick (term_current()->last_refresh_request_tick)
+#define text_buffer (term_current()->cells)
+#define term_line_count (term_current()->line_count)
+#define term_view_scroll (term_current()->view_scroll)
+#define term_ansi_fg (term_current()->ansi_fg)
+#define term_ansi_bold (term_current()->ansi_bold)
+#define term_ansi_state (term_current()->ansi_state)
+#define term_ansi_params (term_current()->ansi_params)
+#define term_ansi_param_count (term_current()->ansi_param_count)
+#define term_ansi_param_value (term_current()->ansi_param_value)
+#define term_ansi_param_has_value (term_current()->ansi_param_has_value)
+
+static void terminal_session_reset(terminal_session_t* session) {
+    if (!session) return;
+    session->cur_x = 0;
+    session->cur_y = 0;
+    session->dirty = 1;
+    session->last_window_w = 0;
+    session->last_window_h = 0;
+    session->last_refresh_request_tick = 0;
+    session->line_count = 1;
+    session->view_scroll = 0;
+    session->ansi_fg = 0x07;
+    session->ansi_bold = 0;
+    session->ansi_state = 0;
+    session->ansi_param_count = 0;
+    session->ansi_param_value = 0;
+    session->ansi_param_has_value = 0;
+    for (int y = 0; y < TERM_SCROLLBACK_LINES; y++) {
+        for (int x = 0; x < TERM_MAX_COLS; x++) {
+            session->cells[y][x].glyph = 0;
+            session->cells[y][x].color = 0x07;
+            session->cells[y][x].reserved = 0;
+            session->cells[y][x].rgb = TERM_TEXT;
+        }
+    }
+}
+
+int terminal_alloc_session(void) {
+    for (int i = 0; i < MAX_TERMINALS; i++) {
+        if (!terminal_sessions[i].allocated) {
+            terminal_sessions[i].allocated = 1;
+            terminal_sessions[i].window_id = -1;
+            terminal_session_reset(&terminal_sessions[i]);
+            return i;
+        }
+    }
+    return -1;
+}
+
+void terminal_bind_window(int session_id, int window_id) {
+    terminal_session_t* session = term_session_by_id(session_id);
+
+    session->allocated = 1;
+    session->window_id = window_id;
+}
+
+void terminal_select_output(int session_id) {
+    if (session_id < 0 || session_id >= MAX_TERMINALS || !terminal_sessions[session_id].allocated) session_id = 0;
+    terminal_output_session_id = session_id;
+    terminal_render_session_id = session_id;
+}
+
+void terminal_select_render(int session_id) {
+    if (session_id < 0 || session_id >= MAX_TERMINALS || !terminal_sessions[session_id].allocated) session_id = 0;
+    terminal_render_session_id = session_id;
+}
+
+void terminal_reset_session(int session_id) {
+    if (session_id < 0 || session_id >= MAX_TERMINALS) return;
+    terminal_sessions[session_id].allocated = 1;
+    terminal_session_reset(&terminal_sessions[session_id]);
+}
 
 static void vga_request_window_refresh(int throttled) {
     int was_dirty = vga_window_dirty;
@@ -86,34 +194,46 @@ static const screen_char_t term_blank_cell = {
     0, 0x07, 0, TERM_TEXT
 };
 
-static uint8_t term_ansi_fg = 0x07;
-static int term_ansi_bold = 0;
-static int term_ansi_state = 0;
-static int term_ansi_params[TERM_ANSI_PARAM_MAX];
-static int term_ansi_param_count = 0;
-static int term_ansi_param_value = 0;
-static int term_ansi_param_has_value = 0;
-
 static int term_window_w(void) {
-    int idx = nwm_get_idx_by_type(WIN_TYPE_TERMINAL);
-    if (idx >= 0 && windows[idx].w > 0) return windows[idx].w;
-    return WIN_WIDTH;
+    terminal_session_t* session = term_render_current();
+    int width = WIN_WIDTH;
+
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        if (windows[i].type == WIN_TYPE_TERMINAL &&
+            windows[i].terminal_session_id == terminal_render_session_id &&
+            windows[i].w > 0) {
+            width = windows[i].w - 2;
+            break;
+        }
+    }
+    (void)session;
+    if (width < TERM_CELL_W * 8) width = TERM_CELL_W * 8;
+    return width;
 }
 
 static int term_window_h(void) {
-    int idx = nwm_get_idx_by_type(WIN_TYPE_TERMINAL);
-    if (idx >= 0 && windows[idx].h > 0) return windows[idx].h;
-    return WIN_HEIGHT;
+    int height = WIN_HEIGHT;
+
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        if (windows[i].type == WIN_TYPE_TERMINAL &&
+            windows[i].terminal_session_id == terminal_render_session_id &&
+            windows[i].h > 0) {
+            height = windows[i].h - UI_WINDOW_CLIENT_TOP - 8;
+            break;
+        }
+    }
+    if (height < TERM_CELL_H * 4) height = TERM_CELL_H * 4;
+    return height;
 }
 
 static int term_content_w(void) {
-    int w = term_window_w() - 48;
+    int w = term_window_w() - 24;
     if (w < TERM_CELL_W * 8) w = TERM_CELL_W * 8;
     return w;
 }
 
 static int term_content_h(void) {
-    int h = term_window_h() - 68;
+    int h = term_window_h() - 24;
     if (h < TERM_CELL_H * 4) h = TERM_CELL_H * 4;
     return h;
 }
@@ -404,21 +524,10 @@ static void term_store_cell(screen_char_t* cell, uint16_t glyph, uint8_t color) 
 static void term_draw_shell(void) {
     int w = term_window_w();
     int h = term_window_h();
-    int close_x = w - TERM_CTRL_RIGHT_PAD - TERM_CTRL_SIZE;
-    int min_x = close_x - TERM_CTRL_GAP - TERM_CTRL_SIZE;
+
     vbe_fill_rect(0, 0, w, h, TERM_CANVAS_BG);
-    vbe_fill_rect_alpha(0, 0, w, 30, UI_WINDOW_ACTIVE_BOTTOM, 255);
-    vbe_fill_rect_alpha(0, 0, w, 1, UI_HILITE_SOFT, 56);
-    vbe_fill_rect_alpha(0, 30, w, 1, 0x173E5E, 220);
-    vbe_fill_rect_alpha(0, 31, w, h - 31, UI_SURFACE_0, 255);
-    vbe_draw_string(24, 10, "Terminal", UI_TEXT);
-    vbe_draw_string(24, 48, "Shell", UI_TEXT_SUBTLE);
-    vbe_draw_string(w - 164, 10, "Wheel / PgUp", UI_TEXT_MUTED);
-    vbe_draw_rounded_rect(min_x, TERM_CTRL_TOP, TERM_CTRL_SIZE, TERM_CTRL_SIZE, 3, 0xE3E8ED, 255);
-    vbe_fill_rect(min_x + 3, TERM_CTRL_TOP + TERM_CTRL_SIZE - 4, TERM_CTRL_SIZE - 6, 2, UI_TEXT_DARK);
-    vbe_draw_rounded_rect(close_x, TERM_CTRL_TOP, TERM_CTRL_SIZE, TERM_CTRL_SIZE, 3, 0xD2645F, 255);
-    vbe_fill_rect(close_x + 3, TERM_CTRL_TOP + 3, TERM_CTRL_SIZE - 6, 2, UI_TEXT_DARK);
-    vbe_fill_rect(close_x + 5, TERM_CTRL_TOP + 5, 2, TERM_CTRL_SIZE - 6, UI_TEXT_DARK);
+    vbe_fill_rect_alpha(0, 0, w, 1, UI_HILITE_SOFT, 24);
+    vbe_fill_rect_alpha(0, h - 1, w, 1, UI_SHADOW, 72);
 }
 
 static void term_draw_cursor(void) {
@@ -447,10 +556,12 @@ int vga_get_title_h() { return 0; }
 void* vga_get_window_buffer() { return vbe_get_window_buffer(); }
 
 int vga_window_needs_refresh(void) {
+    terminal_session_t* session = term_render_current();
     int w = term_window_w();
     int h = term_window_h();
-    if (vga_window_dirty) return 1;
-    if (w != vga_last_window_w || h != vga_last_window_h) return 1;
+    if (terminal_buffer_session_id != terminal_render_session_id) return 1;
+    if (session->dirty) return 1;
+    if (w != session->last_window_w || h != session->last_window_h) return 1;
     return 0;
 }
 
@@ -484,16 +595,32 @@ void draw_window_frame_to_buffer() {
     term_draw_shell();
 }
 
-void vga_refresh_window() {
+static void vga_refresh_render_window(int notify_desktop) {
+    int saved_output_session_id = terminal_output_session_id;
+
+    terminal_output_session_id = terminal_render_session_id;
     draw_window_frame_to_buffer();
     vga_redraw_text_to_buffer();
     vga_last_window_w = term_window_w();
     vga_last_window_h = term_window_h();
     vga_window_dirty = 0;
     vga_last_refresh_request_tick = timer_ticks;
+    terminal_buffer_session_id = terminal_render_session_id;
+    terminal_output_session_id = saved_output_session_id;
     vbe_set_target(vbe_get_backbuffer(), vbe_get_width(), vbe_get_height());
-    gui_needs_redraw = 1;
-    nwm_queue_desktop_event(GUI_WIN_EVT_PAINT, 0, 0, 0);
+    if (notify_desktop) {
+        gui_needs_redraw = 1;
+        nwm_queue_desktop_event(GUI_WIN_EVT_PAINT, 0, 0, 0);
+    }
+}
+
+void vga_refresh_window() {
+    terminal_render_session_id = terminal_output_session_id;
+    vga_refresh_render_window(1);
+}
+
+void vga_refresh_render_window_no_notify(void) {
+    vga_refresh_render_window(0);
 }
 
 void vga_scroll() {
@@ -583,7 +710,7 @@ static void vga_put_glyph_color(uint16_t glyph, uint8_t color) {
     }
     if (cursor_x >= term_cols_visible() - 1) vga_newline();
     term_store_cell(&text_buffer[cursor_y][cursor_x], glyph, color);
-    if (term_view_scroll == 0) {
+    if (term_view_scroll == 0 && terminal_buffer_session_id == terminal_output_session_id) {
         int screen_y = term_cursor_screen_y();
         if (screen_y >= 0) {
             rgb = text_buffer[cursor_y][cursor_x].rgb;

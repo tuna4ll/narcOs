@@ -1842,6 +1842,9 @@ void vbe_draw_icon(int x, int y, int type, const char* label, int selected) {
 #include "fs.h"
 extern disk_fs_node_t dir_cache[MAX_FILES];
 extern void vga_refresh_window(void);
+extern int vga_get_window_w(void);
+extern int vga_get_window_h(void);
+extern void terminal_select_render(int session_id);
 extern int vga_window_needs_refresh(void);
 
 static int ui_count_children(int parent_idx) {
@@ -2182,9 +2185,13 @@ static void vbe_compose_scene_impl(window_t* windows, int win_count, int active_
         
         int is_focused = (i == active_win_idx);
         if (windows[i].type == WIN_TYPE_TERMINAL) {
+            terminal_select_render(windows[i].terminal_session_id);
             if (vga_window_needs_refresh()) vga_refresh_window();
-            (void)is_focused;
-            vbe_blit_raw_surface(windows[i].x, windows[i].y, windows[i].w, windows[i].h, window_buffer);
+            vbe_blit_window_client_surface(&windows[i], window_buffer,
+                                           (uint32_t)vga_get_window_w(),
+                                           (uint32_t)vga_get_window_h(),
+                                           mode_info->bpp / 8U,
+                                           is_focused);
             continue;
         }
 

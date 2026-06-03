@@ -1,6 +1,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "fs.h"
+#include "vbe.h"
 extern void    outb(uint16_t port, uint8_t val);
 extern uint8_t inb(uint16_t port);
 extern void    vga_putchar(char c);
@@ -8,19 +9,38 @@ extern void    vga_backspace();
 extern void    vga_newline();
 #define INPUT_BUF_SIZE 128
 #define CONSOLE_INPUT_QUEUE_SIZE 512
-char input_buf[INPUT_BUF_SIZE];
-int  input_pos  = 0;
-volatile int cmd_ready = 0;
-char cmd_to_execute[INPUT_BUF_SIZE];
 static char console_input_queue[CONSOLE_INPUT_QUEUE_SIZE];
 static volatile uint32_t console_input_head = 0;
 static volatile uint32_t console_input_tail = 0;
 static volatile uint32_t console_input_count = 0;
 #define HISTORY_MAX 10
-char history[HISTORY_MAX][INPUT_BUF_SIZE];
-int history_count = 0;
-int history_current_idx = -1; 
-int history_write_idx = 0;    
+typedef struct {
+    char in_buf[INPUT_BUF_SIZE];
+    int in_pos;
+    volatile int pending;
+    char pending_command[INPUT_BUF_SIZE];
+    char hist[HISTORY_MAX][INPUT_BUF_SIZE];
+    int hist_count;
+    int hist_current_idx;
+    int hist_write_idx;
+} terminal_input_state_t;
+
+static terminal_input_state_t terminal_inputs[MAX_TERMINALS];
+static int terminal_input_session_id = 0;
+
+static terminal_input_state_t* terminal_input_current(void) {
+    if (terminal_input_session_id < 0 || terminal_input_session_id >= MAX_TERMINALS) terminal_input_session_id = 0;
+    return &terminal_inputs[terminal_input_session_id];
+}
+
+#define input_buf (terminal_input_current()->in_buf)
+#define input_pos (terminal_input_current()->in_pos)
+#define cmd_ready (terminal_input_current()->pending)
+#define cmd_to_execute (terminal_input_current()->pending_command)
+#define history (terminal_input_current()->hist)
+#define history_count (terminal_input_current()->hist_count)
+#define history_current_idx (terminal_input_current()->hist_current_idx)
+#define history_write_idx (terminal_input_current()->hist_write_idx)
 int lctrl_pressed = 0;
 int rctrl_pressed = 0;
 int lshift_pressed  = 0;
@@ -109,14 +129,26 @@ static void console_input_enqueue_line(const char* text) {
 
 void init_keyboard()
 {
-    input_pos = 0;
-    for (int i = 0; i < INPUT_BUF_SIZE; i++) input_buf[i] = 0;
+    for (int t = 0; t < MAX_TERMINALS; t++) {
+        terminal_inputs[t].in_pos = 0;
+        terminal_inputs[t].pending = 0;
+        terminal_inputs[t].hist_count = 0;
+        terminal_inputs[t].hist_current_idx = -1;
+        terminal_inputs[t].hist_write_idx = 0;
+        for (int i = 0; i < INPUT_BUF_SIZE; i++) {
+            terminal_inputs[t].in_buf[i] = 0;
+            terminal_inputs[t].pending_command[i] = 0;
+        }
+        for (int h = 0; h < HISTORY_MAX; h++) {
+            for (int i = 0; i < INPUT_BUF_SIZE; i++) terminal_inputs[t].hist[h][i] = 0;
+        }
+    }
+    terminal_input_session_id = 0;
     console_input_head = 0;
     console_input_tail = 0;
     console_input_count = 0;
 }
 
-#include "vbe.h"
 #include "usermode.h"
 extern window_t windows[MAX_WINDOWS];
 extern int window_count;
@@ -131,6 +163,7 @@ extern void vga_scrollback_page(int direction);
 extern void vga_scrollback_home(void);
 extern void vga_scrollback_end(void);
 extern void vga_scrollback_follow_live(void);
+extern void terminal_select_output(int session_id);
 
 static int keyboard_queue_gui_event(uint16_t type, int16_t arg0, int16_t arg1, int32_t arg2) {
     if (nwm_input_capture_active()) {
@@ -158,6 +191,41 @@ static int terminal_window_active(void) {
     return active_window_idx != -1 &&
            windows[active_window_idx].visible &&
            windows[active_window_idx].type == WIN_TYPE_TERMINAL;
+}
+
+static int active_terminal_session_id(void) {
+    if (!terminal_window_active()) return 0;
+    if (windows[active_window_idx].terminal_session_id < 0 ||
+        windows[active_window_idx].terminal_session_id >= MAX_TERMINALS) {
+        return 0;
+    }
+    return windows[active_window_idx].terminal_session_id;
+}
+
+static void select_active_terminal_input(void) {
+    terminal_input_session_id = active_terminal_session_id();
+    terminal_select_output(terminal_input_session_id);
+}
+
+int terminal_command_ready(int session_id) {
+    if (session_id < 0 || session_id >= MAX_TERMINALS) return 0;
+    return terminal_inputs[session_id].pending != 0;
+}
+
+int terminal_take_command(int session_id, char* out, uint32_t out_size) {
+    terminal_input_state_t* state;
+    uint32_t i = 0;
+
+    if (session_id < 0 || session_id >= MAX_TERMINALS || !out || out_size == 0U) return -1;
+    state = &terminal_inputs[session_id];
+    if (!state->pending) return -1;
+    while (i + 1U < out_size && state->pending_command[i] != '\0') {
+        out[i] = state->pending_command[i];
+        i++;
+    }
+    out[i] = '\0';
+    state->pending = 0;
+    return 0;
 }
 
 static void set_input_line(const char* text) {
@@ -218,6 +286,7 @@ static int keyboard_dispatch_legacy_or_console(uint8_t scancode, int modifiers, 
     int terminal_active = terminal_window_active();
 
     if (terminal_active) {
+        select_active_terminal_input();
         if (scancode == 0x49) {
             vga_scrollback_page(1);
             return 1;
@@ -253,6 +322,10 @@ static int keyboard_dispatch_legacy_or_console(uint8_t scancode, int modifiers, 
         return 1;
     }
     if (!terminal_active && !text_console_active) return 0;
+    if (text_console_active && !terminal_active) {
+        terminal_input_session_id = 0;
+        terminal_select_output(0);
+    }
     if (scancode == 0x0E) {
         vga_scrollback_follow_live();
         if (input_pos > 0) {

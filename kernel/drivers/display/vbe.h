@@ -27,6 +27,7 @@ typedef struct {
     int minimized;
     int id;
     int owner_pid;
+    int terminal_session_id;
     uint32_t flags;
     uint8_t* client_surface;
     uint32_t client_surface_pages;
@@ -43,7 +44,8 @@ typedef struct {
     gui_window_event_t event_queue[WINDOW_EVENT_QUEUE_CAP];
 } window_t;
 
-#define MAX_WINDOWS 8
+#define MAX_WINDOWS 16
+#define MAX_TERMINALS 8
 void init_vbe();
 void vbe_update();
 void vbe_put_pixel(int x, int y, uint32_t color);

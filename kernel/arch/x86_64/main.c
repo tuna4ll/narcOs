@@ -20,14 +20,15 @@
 #define PHASE8_SHELL_TMP_STDIN 14
 #define PHASE8_SHELL_TMP_STDOUT 15
 
-extern volatile int cmd_ready;
-extern char cmd_to_execute[128];
 extern int current_dir_index;
 void init_keyboard(void);
 void clear_screen(void);
 void vga_print(const char* str);
 void vga_println(const char* str);
 void vga_print_int(int num);
+void terminal_select_output(int session_id);
+int terminal_command_ready(int session_id);
+int terminal_take_command(int session_id, char* out, uint32_t out_size);
 
 volatile uint32_t timer_ticks = 0;
 
@@ -479,10 +480,13 @@ static void shell_execute_command(char* command) {
 }
 
 static void console_process_main(void) {
+    char command[128];
+
     for (;;) {
-        if (cmd_ready) {
-            shell_execute_command(cmd_to_execute);
-            cmd_ready = 0;
+        if (terminal_command_ready(0) &&
+            terminal_take_command(0, command, sizeof(command)) == 0) {
+            terminal_select_output(0);
+            shell_execute_command(command);
             shell_print_prompt();
         }
         process_poll();
