@@ -124,7 +124,9 @@ I386_SNAKE_ICON_RGBA = $(I386_OBJ_DIR)/user/assets/snake_icon.rgba
 I386_SNAKE_ICON_OBJECT = $(I386_OBJ_DIR)/user/assets/snake_icon.o
 I386_DOOM_ICON_RGBA = $(I386_OBJ_DIR)/user/assets/doom_icon.rgba
 I386_DOOM_ICON_OBJECT = $(I386_OBJ_DIR)/user/assets/doom_icon.o
-I386_COMMON_ICON_OBJECTS = $(I386_FOLDER_ICON_OBJECT) $(I386_TEXT_ICON_OBJECT) $(I386_SETTINGS_ICON_OBJECT) $(I386_THIS_PC_ICON_OBJECT) $(I386_SNAKE_ICON_OBJECT) $(I386_DOOM_ICON_OBJECT)
+I386_TERMINAL_ICON_RGBA = $(I386_OBJ_DIR)/user/assets/terminal_icon.rgba
+I386_TERMINAL_ICON_OBJECT = $(I386_OBJ_DIR)/user/assets/terminal_icon.o
+I386_COMMON_ICON_OBJECTS = $(I386_FOLDER_ICON_OBJECT) $(I386_TEXT_ICON_OBJECT) $(I386_SETTINGS_ICON_OBJECT) $(I386_THIS_PC_ICON_OBJECT) $(I386_SNAKE_ICON_OBJECT) $(I386_DOOM_ICON_OBJECT) $(I386_TERMINAL_ICON_OBJECT)
 I386_USER_CRT_OBJECT = $(I386_OBJ_DIR)/user/crt0.o
 I386_DOOM_BINARY = $(I386_OBJ_DIR)/user/bin/doom
 I386_POSIX_SMOKE_BINARY = $(I386_OBJ_DIR)/user/bin/posix_smoke
@@ -220,7 +222,9 @@ X86_64_SNAKE_ICON_RGBA = $(X86_64_OBJ_DIR)/user/assets/snake_icon.rgba
 X86_64_SNAKE_ICON_OBJECT = $(X86_64_OBJ_DIR)/user/assets/snake_icon.o
 X86_64_DOOM_ICON_RGBA = $(X86_64_OBJ_DIR)/user/assets/doom_icon.rgba
 X86_64_DOOM_ICON_OBJECT = $(X86_64_OBJ_DIR)/user/assets/doom_icon.o
-X86_64_COMMON_ICON_OBJECTS = $(X86_64_FOLDER_ICON_OBJECT) $(X86_64_TEXT_ICON_OBJECT) $(X86_64_SETTINGS_ICON_OBJECT) $(X86_64_THIS_PC_ICON_OBJECT) $(X86_64_SNAKE_ICON_OBJECT) $(X86_64_DOOM_ICON_OBJECT)
+X86_64_TERMINAL_ICON_RGBA = $(X86_64_OBJ_DIR)/user/assets/terminal_icon.rgba
+X86_64_TERMINAL_ICON_OBJECT = $(X86_64_OBJ_DIR)/user/assets/terminal_icon.o
+X86_64_COMMON_ICON_OBJECTS = $(X86_64_FOLDER_ICON_OBJECT) $(X86_64_TEXT_ICON_OBJECT) $(X86_64_SETTINGS_ICON_OBJECT) $(X86_64_THIS_PC_ICON_OBJECT) $(X86_64_SNAKE_ICON_OBJECT) $(X86_64_DOOM_ICON_OBJECT) $(X86_64_TERMINAL_ICON_OBJECT)
 X86_64_USER_CRT_OBJECT = $(X86_64_OBJ_DIR)/user/crt0_x86_64.o
 X86_64_DOOM_BINARY = $(X86_64_OBJ_DIR)/user/bin/doom
 X86_64_POSIX_SMOKE_BINARY = $(X86_64_OBJ_DIR)/user/bin/posix_smoke
@@ -478,6 +482,14 @@ $(I386_DOOM_ICON_OBJECT): $(I386_DOOM_ICON_RGBA)
 	@mkdir -p $(dir $@)
 	$(LD) -r -b binary -m elf_i386 $< -o $@
 
+$(I386_TERMINAL_ICON_RGBA): $(ASSET_DIR)/icon/terminal.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(I386_TERMINAL_ICON_OBJECT): $(I386_TERMINAL_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_i386 $< -o $@
+
 $(I386_KERNEL_ELF): $(I386_KERNEL_OBJECTS) linker_i386.ld
 	@mkdir -p $(dir $@)
 	$(LD) $(I386_LDFLAGS) -o $@ $(I386_KERNEL_OBJECTS)
@@ -660,6 +672,14 @@ $(X86_64_DOOM_ICON_RGBA): $(ASSET_DIR)/icon/doom.png Makefile
 	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
 
 $(X86_64_DOOM_ICON_OBJECT): $(X86_64_DOOM_ICON_RGBA)
+	@mkdir -p $(dir $@)
+	$(LD) -r -b binary -m elf_x86_64 $< -o $@
+
+$(X86_64_TERMINAL_ICON_RGBA): $(ASSET_DIR)/icon/terminal.png Makefile
+	@mkdir -p $(dir $@)
+	magick $< -filter Lanczos -resize 44x44 -gravity center -background none -extent 44x44 -depth 8 rgba:$@
+
+$(X86_64_TERMINAL_ICON_OBJECT): $(X86_64_TERMINAL_ICON_RGBA)
 	@mkdir -p $(dir $@)
 	$(LD) -r -b binary -m elf_x86_64 $< -o $@
 

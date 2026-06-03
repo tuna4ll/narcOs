@@ -77,6 +77,7 @@ extern const uint8_t _binary_obj_x86_64_user_assets_settings_icon_rgba_start[];
 extern const uint8_t _binary_obj_x86_64_user_assets_this_pc_icon_rgba_start[];
 extern const uint8_t _binary_obj_x86_64_user_assets_snake_icon_rgba_start[];
 extern const uint8_t _binary_obj_x86_64_user_assets_doom_icon_rgba_start[];
+extern const uint8_t _binary_obj_x86_64_user_assets_terminal_icon_rgba_start[];
 #else
 #define DESKTOP_BG_W 320
 #define DESKTOP_BG_H 180
@@ -88,6 +89,7 @@ extern const uint8_t _binary_obj_i386_user_assets_settings_icon_rgba_start[];
 extern const uint8_t _binary_obj_i386_user_assets_this_pc_icon_rgba_start[];
 extern const uint8_t _binary_obj_i386_user_assets_snake_icon_rgba_start[];
 extern const uint8_t _binary_obj_i386_user_assets_doom_icon_rgba_start[];
+extern const uint8_t _binary_obj_i386_user_assets_terminal_icon_rgba_start[];
 #endif
 
 typedef struct {
@@ -562,6 +564,14 @@ static const uint8_t* desktop_doom_icon_rgba(void) {
 #endif
 }
 
+static const uint8_t* desktop_terminal_icon_rgba(void) {
+#if defined(__x86_64__)
+    return _binary_obj_x86_64_user_assets_terminal_icon_rgba_start;
+#else
+    return _binary_obj_i386_user_assets_terminal_icon_rgba_start;
+#endif
+}
+
 static const uint8_t* desktop_bitmap_icon_for_kind(int kind) {
     switch (kind) {
         case DESKTOP_ICON_KIND_THIS_PC: return desktop_this_pc_icon_rgba();
@@ -585,6 +595,7 @@ static const uint8_t* desktop_bitmap_icon_for_user_gui_icon(int icon) {
         case USER_GUI_ICON_SETTINGS: return desktop_settings_icon_rgba();
         case USER_GUI_ICON_SNAKE: return desktop_snake_icon_rgba();
         case USER_GUI_ICON_DOOM: return desktop_doom_icon_rgba();
+        case USER_GUI_ICON_TERMINAL: return desktop_terminal_icon_rgba();
         default: return 0;
     }
 }
@@ -1398,7 +1409,9 @@ static void draw_taskbar_legacy(user_gui_surface_t* surface, int width, const gu
                              hovered_taskbar_button == TASKBAR_HOVER_TERMINAL ? mix_color(UI_ACCENT_ALT, 0x20262D, 94) : 0x20262D, 0,
                              clip_x, clip_y, clip_w, clip_h);
     if (rects_intersect(clip_x, clip_y, clip_w, clip_h, app_x, bar_y, APP_BUTTON_W, START_BUTTON_H)) {
-        user_gui_draw_icon(surface, USER_GUI_ICON_TERMINAL, app_x + 10, bar_y + 4, 17, UI_ACCENT_ALT, 0);
+        user_gui_draw_rgba_bitmap_scaled(surface, desktop_terminal_icon_rgba(),
+                                         DESKTOP_FOLDER_ICON_W, DESKTOP_FOLDER_ICON_H,
+                                         app_x + 8, bar_y + 3, 20);
         draw_string_clipped(surface, app_x + 32, bar_y + 9, "Terminal", UI_TEXT,
                             clip_x, clip_y, clip_w, clip_h);
     }
