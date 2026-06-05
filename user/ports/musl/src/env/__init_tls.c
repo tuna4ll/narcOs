@@ -11,6 +11,9 @@
 
 volatile int __thread_list_lock;
 
+#if defined(__x86_64__) && defined(__GNUC__)
+__attribute__((optimize("no-tree-vectorize")))
+#endif
 int __init_tp(void *p)
 {
 	pthread_t td = p;
@@ -23,7 +26,8 @@ int __init_tp(void *p)
 	td->locale = &libc.global_locale;
 	td->robust_list.head = &td->robust_list.head;
 	td->sysinfo = __sysinfo;
-	td->next = td->prev = td;
+	td->next = td;
+	td->prev = td;
 	return 0;
 }
 

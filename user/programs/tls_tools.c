@@ -178,8 +178,8 @@ static int tls_tools_test_main(int argc, char** argv) {
         return 1;
     }
 
-    status = user_tls_run_selftests(&report);
     if (userlib_println("TLS Self-Test") != 0) return 1;
+    status = user_tls_run_selftests(&report);
     if (print_summary_line("Total          : ", report.total_count) != 0) return 1;
     if (print_summary_line("Passed         : ", report.pass_count) != 0) return 1;
     if (print_summary_line("Failed         : ", report.fail_count) != 0) return 1;
@@ -194,16 +194,24 @@ static int tls_tools_test_main(int argc, char** argv) {
 int main(int argc, char** argv) {
     const char* command = argc > 0 ? tls_tools_basename(argv[0]) : "";
 
-    if (userlib_strcmp(command, "https") == 0) return tls_tools_https_main(argc, argv);
-    if (userlib_strcmp(command, "fetch") == 0) return tls_tools_fetch_main(argc, argv);
+    if (userlib_strcmp(command, "https") == 0) {
+        return tls_tools_https_main(argc, argv);
+    }
+    if (userlib_strcmp(command, "fetch") == 0) {
+        return tls_tools_fetch_main(argc, argv);
+    }
     if (userlib_strcmp(command, "tls_test") == 0 || userlib_strcmp(command, "tls-test") == 0) {
         return tls_tools_test_main(argc, argv);
     }
 
     if (argc >= 2) {
         command = argv[1];
-        if (userlib_strcmp(command, "https") == 0) return tls_tools_https_main(argc - 1, argv + 1);
-        if (userlib_strcmp(command, "fetch") == 0) return tls_tools_fetch_main(argc - 1, argv + 1);
+        if (userlib_strcmp(command, "https") == 0) {
+            return tls_tools_https_main(argc - 1, argv + 1);
+        }
+        if (userlib_strcmp(command, "fetch") == 0) {
+            return tls_tools_fetch_main(argc - 1, argv + 1);
+        }
         if (userlib_strcmp(command, "tls_test") == 0 || userlib_strcmp(command, "tls-test") == 0) {
             return tls_tools_test_main(argc - 1, argv + 1);
         }

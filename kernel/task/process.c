@@ -38,6 +38,7 @@ static process_t* find_process_by_pid(int pid);
 static process_t* process_reserve_slot(process_kind_t kind, const char* name, int parent_pid);
 static void release_recycled_process_metadata(process_t* proc);
 static void process_set_name_from_path(char* dst, size_t dst_size, const char* path);
+static const char* process_resolve_exec_image_path(const char* path);
 static void process_link_parent(process_t* proc);
 static void process_log_created(const process_t* proc);
 static void process_abandon_reserved_slot(process_t* proc);
@@ -195,6 +196,7 @@ int process_create_user(const char* path, const char* const* argv, int argc, uin
     char proc_name[32];
     process_t* caller = process_current();
     process_t* proc;
+    const char* load_path;
     int parent_pid = 0;
     int status;
 
@@ -217,10 +219,11 @@ int process_create_user(const char* path, const char* const* argv, int argc, uin
     proc->image_path[sizeof(proc->image_path) - 1U] = '\0';
     proc->flags = flags & ~PROCESS_FLAG_USER_EXIT_PENDING;
 
-    status = exec_load_file(path, &proc->user_space);
+    load_path = process_resolve_exec_image_path(path);
+    status = exec_load_file(load_path, &proc->user_space);
     if (status != EXEC_OK) {
         serial_write("[sched] user load failed ");
-        serial_write(path);
+        serial_write(load_path);
         serial_write(" reason=");
         serial_write(exec_error_string(status));
         serial_write(" status=");
@@ -494,6 +497,17 @@ static void process_set_name_from_path(char* dst, size_t dst_size, const char* p
     if (*leaf == '\0') leaf = path;
     strncpy(dst, leaf, dst_size - 1U);
     dst[dst_size - 1U] = '\0';
+}
+
+static const char* process_resolve_exec_image_path(const char* path) {
+    if (!path) return path;
+    if (strcmp(path, "/bin/https") == 0 ||
+        strcmp(path, "/bin/fetch") == 0 ||
+        strcmp(path, "/bin/tls-test") == 0 ||
+        strcmp(path, "/bin/tls_test") == 0) {
+        return "/bin/tls_tools";
+    }
+    return path;
 }
 
 void scheduler_start() {
@@ -857,7 +871,7 @@ static int process_exec_replace_current(process_t* proc) {
 
     if (!proc || proc->pending_exec_path[0] == '\0') return -1;
     memset(&new_space, 0, sizeof(new_space));
-    status = exec_load_file(proc->pending_exec_path, &new_space);
+    status = exec_load_file(process_resolve_exec_image_path(proc->pending_exec_path), &new_space);
     if (status != EXEC_OK) {
         serial_write("[sched] exec failed pid=");
         serial_write_hex32((uint32_t)proc->pid);

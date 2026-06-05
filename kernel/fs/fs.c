@@ -260,8 +260,7 @@ static int fs_storage_write_sector(uint32_t lba, const uint8_t* buffer) {
     X(narcpad) \
     X(settings) \
     X(snake) \
-    X(core_tools) \
-    X(tls_tools)
+    X(core_tools)
 
 #define FS_CORE_TOOL_ALIASES(X) \
     X(help, core_tools) \
@@ -315,12 +314,6 @@ static const fs_packaged_binary_t fs_packaged_binaries[] = {
 #endif
     FS_DISTINCT_USER_PROGRAMS(FS_PACKAGED_BINARY_ENTRY)
     FS_CORE_TOOL_ALIASES(FS_PACKAGED_BINARY_ALIAS)
-    FS_TLS_TOOL_ALIASES(FS_PACKAGED_BINARY_ALIAS)
-#if UINTPTR_MAX > 0xFFFFFFFFU
-    { "/bin/tls-test", _binary_obj_x86_64_user_bin_tls_tools_start, _binary_obj_x86_64_user_bin_tls_tools_end },
-#else
-    { "/bin/tls-test", _binary_obj_i386_user_bin_tls_tools_start, _binary_obj_i386_user_bin_tls_tools_end },
-#endif
 };
 
 #undef FS_PACKAGED_BINARY_ALIAS
@@ -440,7 +433,8 @@ static void fs_sync_packaged_binaries() {
     }
 }
 
-#if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN) || defined(NARCOS_DISK_POSIX_SMOKE)
+#if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN) || \
+    defined(NARCOS_DISK_POSIX_SMOKE) || defined(NARCOS_DISK_TLS_TOOLS)
 static int fs_read_disk_blob(uint32_t src_lba, size_t len, void* buffer, size_t offset, size_t max_len) {
     uint8_t* bytes = (uint8_t*)buffer;
     size_t read_len;
@@ -520,6 +514,17 @@ static int fs_disk_blob_info_for_path(const char* path, uint32_t* out_lba, size_
         return 1;
     }
 #endif
+#if defined(NARCOS_DISK_TLS_TOOLS)
+    if (strcmp(path, "/bin/tls_tools") == 0 ||
+        strcmp(path, "/bin/https") == 0 ||
+        strcmp(path, "/bin/fetch") == 0 ||
+        strcmp(path, "/bin/tls_test") == 0 ||
+        strcmp(path, "/bin/tls-test") == 0) {
+        if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_TLS_TOOLS_LBA;
+        if (out_len) *out_len = (size_t)NARCOS_DISK_TLS_TOOLS_SIZE;
+        return 1;
+    }
+#endif
     return 0;
 }
 
@@ -543,6 +548,17 @@ static int fs_disk_blob_info_for_idx(int idx, uint32_t* out_lba, size_t* out_len
     if (idx == fs_find_node_internal("/bin/posix_smoke")) {
         if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_POSIX_SMOKE_LBA;
         if (out_len) *out_len = (size_t)NARCOS_DISK_POSIX_SMOKE_SIZE;
+        return 1;
+    }
+#endif
+#if defined(NARCOS_DISK_TLS_TOOLS)
+    if (idx == fs_find_node_internal("/bin/tls_tools") ||
+        idx == fs_find_node_internal("/bin/https") ||
+        idx == fs_find_node_internal("/bin/fetch") ||
+        idx == fs_find_node_internal("/bin/tls_test") ||
+        idx == fs_find_node_internal("/bin/tls-test")) {
+        if (out_lba) *out_lba = (uint32_t)NARCOS_DISK_TLS_TOOLS_LBA;
+        if (out_len) *out_len = (size_t)NARCOS_DISK_TLS_TOOLS_SIZE;
         return 1;
     }
 #endif
@@ -575,7 +591,8 @@ static int fs_disk_blob_info_for_idx(int idx, uint32_t* out_lba, size_t* out_len
 
 #endif
 
-#if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN) || defined(NARCOS_DISK_POSIX_SMOKE)
+#if defined(NARCOS_DISK_DOOM1_WAD) || defined(NARCOS_DISK_DOOM_BIN) || \
+    defined(NARCOS_DISK_POSIX_SMOKE) || defined(NARCOS_DISK_TLS_TOOLS)
 static int fs_mount_disk_blob(const char* path, uint32_t src_lba, size_t len) {
     int idx;
     uint32_t sectors;
@@ -675,6 +692,37 @@ static void fs_sync_disk_posix_smoke(void) {
     } else {
         vga_print_color("[fs] posix_smoke mounted at /bin/posix_smoke\n", 0x0A);
     }
+}
+#endif
+
+#if defined(NARCOS_DISK_TLS_TOOLS)
+static void fs_sync_disk_tls_tools(void) {
+    int status;
+    static const char* const paths[] = {
+        "/bin/tls_tools",
+        "/bin/https",
+        "/bin/fetch",
+        "/bin/tls_test",
+        "/bin/tls-test"
+    };
+
+    (void)fs_create_dir("/bin");
+    for (uint32_t i = 0; i < (uint32_t)(sizeof(paths) / sizeof(paths[0])); i++) {
+        status = fs_mount_disk_blob(paths[i],
+                                   (uint32_t)NARCOS_DISK_TLS_TOOLS_LBA,
+                                   (size_t)NARCOS_DISK_TLS_TOOLS_SIZE);
+        if (status != 0) {
+            serial_write("[fs] disk tls_tools mount failed path=");
+            serial_write(paths[i]);
+            serial_write(" len=");
+            serial_write_hex32((uint32_t)NARCOS_DISK_TLS_TOOLS_SIZE);
+            serial_write(" lba=");
+            serial_write_hex32((uint32_t)NARCOS_DISK_TLS_TOOLS_LBA);
+            serial_write_char('\n');
+            vga_print_color("[fs] tls_tools mount failed\n", 0x0C);
+        }
+    }
+    vga_print_color("[fs] tls_tools aliases mounted\n", 0x0A);
 }
 #endif
 
@@ -869,6 +917,9 @@ void init_fs() {
 #if defined(NARCOS_DISK_POSIX_SMOKE)
     fs_sync_disk_posix_smoke();
 #endif
+#if defined(NARCOS_DISK_TLS_TOOLS)
+    fs_sync_disk_tls_tools();
+#endif
     return;
 #endif
 
@@ -884,6 +935,9 @@ void init_fs() {
 #endif
 #if defined(NARCOS_DISK_POSIX_SMOKE)
     fs_sync_disk_posix_smoke();
+#endif
+#if defined(NARCOS_DISK_TLS_TOOLS)
+    fs_sync_disk_tls_tools();
 #endif
 }
 int fs_create_file(const char* name) {

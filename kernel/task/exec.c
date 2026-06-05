@@ -1,5 +1,6 @@
 #include "exec.h"
 #include "fs.h"
+#include "memory_alloc.h"
 #include "serial.h"
 #include "string.h"
 
@@ -245,16 +246,34 @@ static int exec_commit_loaded_image(const char* path, exec_address_space_t* out_
     }
 
     for (uint32_t i = 0; i < load_segment_count; i++) {
-        void* phys_base = alloc_physical_pages(segments[i].page_count);
+        uint8_t* file_data = 0;
+        void* phys_base;
         uint32_t segment_flags = PAGING_FLAG_WRITE;
         int status;
 
+        if (segments[i].filesz != 0U) {
+            file_data = (uint8_t*)malloc(segments[i].filesz);
+            if (!file_data) {
+                exec_release_address_space(&temp_space);
+                return exec_fail_segment(path, "alloc-segment-buffer", EXEC_ERR_MEMORY, i);
+            }
+            status = fs_read_file_raw(path, file_data, segments[i].offset, segments[i].filesz);
+            if (status != (int)segments[i].filesz) {
+                free(file_data);
+                exec_release_address_space(&temp_space);
+                return exec_fail_segment(path, "read-segment-data", EXEC_ERR_IO, i);
+            }
+        }
+
+        phys_base = alloc_physical_pages(segments[i].page_count);
         if (!phys_base) {
+            if (file_data) free(file_data);
             exec_release_address_space(&temp_space);
             return exec_fail_segment(path, "alloc-segment-pages", EXEC_ERR_MEMORY, i);
         }
         if (paging_map_user_region(segments[i].map_base, (uint32_t)(uintptr_t)phys_base,
                                    segments[i].map_size, segment_flags) != 0) {
+            if (file_data) free(file_data);
             free_physical_pages(phys_base, segments[i].page_count);
             exec_release_address_space(&temp_space);
             return exec_fail_segment(path, "map-segment-temp", EXEC_ERR_MEMORY, i);
@@ -262,19 +281,16 @@ static int exec_commit_loaded_image(const char* path, exec_address_space_t* out_
         final_flags = (segments[i].flags & EXEC_ELF_PF_W) != 0U ? PAGING_FLAG_WRITE : 0U;
         if (exec_record_mapping(&temp_space, segments[i].map_base,
                                 (uint32_t)(uintptr_t)phys_base, segments[i].page_count, final_flags) != EXEC_OK) {
+            if (file_data) free(file_data);
             free_physical_pages(phys_base, segments[i].page_count);
             exec_release_address_space(&temp_space);
             return exec_fail_segment(path, "record-segment", EXEC_ERR_MEMORY, i);
         }
 
         memset((void*)(uintptr_t)segments[i].map_base, 0, segments[i].map_size);
-        if (segments[i].filesz != 0U) {
-            status = fs_read_file_raw(path, (void*)(uintptr_t)segments[i].vaddr,
-                                      segments[i].offset, segments[i].filesz);
-            if (status != (int)segments[i].filesz) {
-                exec_release_address_space(&temp_space);
-                return exec_fail_segment(path, "read-segment-data", EXEC_ERR_IO, i);
-            }
+        if (file_data) {
+            memcpy((void*)(uintptr_t)segments[i].vaddr, file_data, segments[i].filesz);
+            free(file_data);
         }
 
         if (paging_map_user_region(segments[i].map_base, (uint32_t)(uintptr_t)phys_base,
@@ -347,8 +363,7 @@ void exec_release_address_space(exec_address_space_t* space) {
 
 int exec_activate_address_space(const exec_address_space_t* space) {
     if (!space || !space->valid) return EXEC_ERR_INVALID;
-    if (exec_active_space == space) return EXEC_OK;
-    if (exec_active_space) exec_unmap_address_space(exec_active_space);
+    if (exec_active_space && exec_active_space != space) exec_unmap_address_space(exec_active_space);
     for (uint32_t i = 0; i < space->mapping_count; i++) {
         const exec_mapping_t* mapping = &space->mappings[i];
         if (paging_map_user_region(mapping->virt_base, mapping->phys_base,

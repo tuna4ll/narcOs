@@ -331,10 +331,57 @@ static uint32_t prog_http_find_body(const char* response, uint32_t length) {
     return 0;
 }
 
+static char prog_hex_digit(uint8_t value) {
+    value &= 0x0FU;
+    return value < 10U ? (char)('0' + value) : (char)('A' + (value - 10U));
+}
+
+static int prog_print_http_response_bytes(const char* response, uint32_t length) {
+    char out[192];
+    int off = 0;
+
+    if (!response || length == 0U) return userlib_println("(empty response)");
+    for (uint32_t i = 0; i < length; i++) {
+        uint8_t ch = (uint8_t)response[i];
+        char escaped[4];
+        const char* text = 0;
+
+        if (ch == '\r') {
+            continue;
+        } else if (ch == '\n' || ch == '\t' || (ch >= 0x20U && ch <= 0x7EU)) {
+            if (off + 1 >= (int)sizeof(out)) {
+                if (userlib_write_all(USER_STDOUT, out, (uint32_t)off) != 0) return -1;
+                off = 0;
+            }
+            out[off++] = (char)ch;
+            continue;
+        }
+
+        escaped[0] = '\\';
+        escaped[1] = 'x';
+        escaped[2] = prog_hex_digit(ch >> 4U);
+        escaped[3] = prog_hex_digit(ch);
+        text = escaped;
+        for (int j = 0; j < 4; j++) {
+            if (off + 1 >= (int)sizeof(out)) {
+                if (userlib_write_all(USER_STDOUT, out, (uint32_t)off) != 0) return -1;
+                off = 0;
+            }
+            out[off++] = text[j];
+        }
+    }
+    if (off > 0 && userlib_write_all(USER_STDOUT, out, (uint32_t)off) != 0) return -1;
+    return userlib_write_all(USER_STDOUT, "\n", 1U);
+}
+
 static int prog_print_http_response(const char* target, const char* response,
                                     const net_http_result_t* result) {
     char line[224];
     int off = 0;
+    uint32_t response_len = result ? result->response_len : 0U;
+    uint32_t resolved_ip = result ? result->resolved_ip : 0U;
+    uint32_t truncated = result ? result->truncated : 0U;
+    uint32_t complete = result ? result->complete : 1U;
 
     line[0] = '\0';
     if (prog_append_text(line, sizeof(line), &off, "HTTP GET        : ") != 0) return -1;
@@ -344,13 +391,13 @@ static int prog_print_http_response(const char* target, const char* response,
     line[0] = '\0';
     off = 0;
     if (prog_append_text(line, sizeof(line), &off, "Resolved        : ") != 0) return -1;
-    if (prog_append_ip(line, sizeof(line), &off, result->resolved_ip) != 0) return -1;
+    if (prog_append_ip(line, sizeof(line), &off, resolved_ip) != 0) return -1;
     if (userlib_println(line) != 0) return -1;
 
     if (userlib_println("---- response ----") != 0) return -1;
-    if (userlib_println((response && response[0] != '\0') ? response : "(empty response)") != 0) return -1;
-    if (result->truncated != 0U && userlib_println("warning: Response truncated to local buffer size.") != 0) return -1;
-    if (result->complete == 0U && userlib_println("warning: Remote peer did not close cleanly before timeout.") != 0) return -1;
+    if (prog_print_http_response_bytes(response, response_len) != 0) return -1;
+    if (truncated != 0U && userlib_println("warning: Response truncated to local buffer size.") != 0) return -1;
+    if (complete == 0U && userlib_println("warning: Remote peer did not close cleanly before timeout.") != 0) return -1;
     return 0;
 }
 
