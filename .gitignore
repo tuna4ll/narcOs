@@ -4,4 +4,5 @@ kernel.bin
 kernel.elf
 minios.img
 obj/
+build/
 plan.md

@@ -110,9 +110,8 @@ extern user_current_task_frame_ptr
 %1:
     PUSH_GPRS
     lea rax, [rsp + X64_FRAME_GPR_SIZE]
-    push qword 0
-    lea rbx, [rax + 24]
-    push rbx
+    push qword [rax + 32]
+    push qword [rax + 24]
     push qword [rax + 16]
     push qword [rax + 8]
     push qword [rax + 0]
@@ -233,8 +232,6 @@ x64_isr_syscall:
     mov ax, X64_GDT_KERNEL_DATA
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
 
     mov rdi, rsp
     mov rax, rsp
@@ -297,8 +294,6 @@ x64_isr_user_yield:
     mov ax, X64_GDT_KERNEL_DATA
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
 
     mov rdi, rsp
     mov rax, rsp

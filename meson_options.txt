@@ -1,0 +1,6 @@
+option('vbe_width', type: 'integer', value: 1024, description: 'VBE framebuffer width passed to stage2')
+option('vbe_height', type: 'integer', value: 768, description: 'VBE framebuffer height passed to stage2')
+option('disk_image_sectors', type: 'integer', value: 49152, description: 'Raw disk image size in 512-byte sectors')
+option('autorun_posix_smoke', type: 'boolean', value: false, description: 'Compile kernel with NARCOS_AUTORUN_POSIX_SMOKE=1')
+option('musl_dir', type: 'string', value: 'user/ports/musl', description: 'Path to the vendored musl tree')
+option('musl_prefix', type: 'string', value: '/usr', description: 'Install prefix used while staging musl')

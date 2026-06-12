@@ -32,14 +32,14 @@ static __inline long __syscall3(long n, long a, long b, long c)
 static __inline long __syscall4(long n, long a, long b, long c, long d)
 {
 	long ret;
-	__asm__ __volatile__("int $0x80" : "=a"(ret) : "a"(n), "b"(a), "c"(b), "d"(c), "S"(d) : "memory");
+	__asm__ __volatile__("int $0x80" : "=a"(ret) : "a"(n), "b"(a), "c"(b), "d"(c), "D"(d) : "memory");
 	return ret;
 }
 
 static __inline long __syscall5(long n, long a, long b, long c, long d, long e)
 {
 	long ret;
-	__asm__ __volatile__("int $0x80" : "=a"(ret) : "a"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e) : "memory");
+	__asm__ __volatile__("int $0x80" : "=a"(ret) : "a"(n), "b"(a), "c"(b), "d"(c), "D"(d), "S"(e) : "memory");
 	return ret;
 }
 
@@ -47,6 +47,6 @@ static __inline long __syscall6(long n, long a, long b, long c, long d, long e, 
 {
 	long ret;
 	register long r8 __asm__("r8") = f;
-	__asm__ __volatile__("int $0x80" : "=a"(ret) : "a"(n), "b"(a), "c"(b), "d"(c), "S"(d), "D"(e), "r"(r8) : "memory");
+	__asm__ __volatile__("int $0x80" : "=a"(ret) : "a"(n), "b"(a), "c"(b), "d"(c), "D"(d), "S"(e), "r"(r8) : "memory");
 	return ret;
 }

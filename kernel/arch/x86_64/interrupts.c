@@ -142,6 +142,33 @@ static void x64_log_frame(const char* tag, x64_trap_frame_t* frame, uint64_t ext
     x64_serial_write_char('\n');
 }
 
+static void x64_serial_write_byte(uint8_t value) {
+    static const char hex[] = "0123456789ABCDEF";
+
+    x64_serial_write_char(hex[(value >> 4) & 0x0FU]);
+    x64_serial_write_char(hex[value & 0x0FU]);
+}
+
+static void x64_log_user_code_bytes(uint64_t rip) {
+    const uint64_t user_base = 0x0000000040000000ULL;
+    const uint64_t user_end = 0x0000000044000000ULL;
+    uint64_t start;
+
+    if (rip < user_base || rip >= user_end) return;
+    start = rip >= 4ULL ? rip - 4ULL : rip;
+    if (start < user_base || start + 12ULL > user_end) return;
+
+    x64_serial_write("[trap] bytes@");
+    x64_serial_write_hex64(start);
+    x64_serial_write("=");
+    for (uint64_t i = 0; i < 12ULL; i++) {
+        uint8_t byte = *((volatile const uint8_t*)(uintptr_t)(start + i));
+        x64_serial_write_byte(byte);
+        if (i + 1ULL != 12ULL) x64_serial_write_char(' ');
+    }
+    x64_serial_write_char('\n');
+}
+
 static void x64_panic_halt(void) {
     process_debug_dump("x64-trap");
     x64_cli();
@@ -306,6 +333,7 @@ void x64_interrupt_dispatch(x64_trap_frame_t* frame) {
 
         case 6:
             x64_log_frame("invalid opcode", frame, 0, 0);
+            x64_log_user_code_bytes(frame->rip);
             if (x64_try_expected_fault_recovery(frame, 0)) return;
             invalid_opcode_handler((arch_trap_frame_t*)frame);
             return;

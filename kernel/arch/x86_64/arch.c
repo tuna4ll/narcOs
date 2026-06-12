@@ -120,7 +120,7 @@ void arch_syscall_capture(const arch_trap_frame_t* frame, arch_syscall_state_t* 
     state->arg0 = frame->rbx;
     state->arg1 = frame->rcx;
     state->arg2 = frame->rdx;
-    state->arg3 = frame->rsi;
-    state->arg4 = frame->rdi;
+    state->arg3 = frame->rdi;
+    state->arg4 = frame->rsi;
     state->arg5 = frame->r8;
 }

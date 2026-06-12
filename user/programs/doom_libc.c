@@ -562,9 +562,16 @@ int sprintf(char* buf, const char* fmt, ...) {
     return rc;
 }
 
+size_t fwrite(const void* ptr, size_t size, size_t nmemb, FILE* f);
+
 static int write_formatted(FILE* f, const char* text, int len) {
-    (void)f;
-    (void)text;
+    if (len <= 0) return len;
+    if (!f || !text) return EOF;
+    if (f == stdout) return userlib_write_all(USER_STDOUT, text, (uint32_t)len) == 0 ? len : EOF;
+    if (f == stderr) return userlib_write_all(USER_STDERR, text, (uint32_t)len) == 0 ? len : EOF;
+    if (f->magic == DOOM_FILE_MAGIC && f->write_mode) {
+        return fwrite(text, 1U, (size_t)len, f) == (size_t)len ? len : EOF;
+    }
     return len;
 }
 

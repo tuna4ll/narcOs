@@ -49,7 +49,7 @@ static inline user_syscall_ret_t user_syscall4(int num, uintptr_t arg1, uintptr_
     user_syscall_ret_t ret;
     asm volatile("int $0x80"
                  : "=a"(ret)
-                 : "a"((uintptr_t)num), "b"(arg1), "c"(arg2), "d"(arg3), "S"(arg4)
+                 : "a"((uintptr_t)num), "b"(arg1), "c"(arg2), "d"(arg3), "D"(arg4)
                  : "memory");
     return ret;
 }

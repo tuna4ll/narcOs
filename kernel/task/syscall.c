@@ -76,6 +76,22 @@ static const char* syscall_leaf_name(const char* path) {
     return leaf;
 }
 
+static int syscall_path_is_current_dir(const char* path) {
+    size_t i = 0;
+    int saw_dot = 0;
+
+    if (!path || path[0] == '\0') return 0;
+    while (path[i] != '\0') {
+        while (path[i] == '/') i++;
+        if (path[i] == '\0') break;
+        if (path[i] != '.') return 0;
+        i++;
+        if (path[i] != '\0' && path[i] != '/') return 0;
+        saw_dot = 1;
+    }
+    return saw_dot;
+}
+
 static uintptr_t syscall_align_up_uintptr(uintptr_t value, uintptr_t align) {
     if (align == 0U) return value;
     return (value + align - 1U) & ~(align - 1U);
@@ -521,12 +537,31 @@ static int user_range_writable(const void* user_ptr, uint32_t len) {
     uintptr_t addr;
     uintptr_t code_base = (uintptr_t)__user_region_start;
     size_t code_size = (size_t)(__user_region_end - __user_region_start);
+    process_t* current;
+    uintptr_t end;
 
     if (len == 0U) return 1;
     if (!user_ptr) return 0;
     addr = (uintptr_t)user_ptr;
     if (user_range_in_window(addr, (size_t)len, code_base, code_size)) return 1;
-    return user_range_in_window(addr, (size_t)len, USER_DATA_WINDOW_BASE, USER_DATA_WINDOW_SIZE);
+    if (!user_range_in_window(addr, (size_t)len, USER_DATA_WINDOW_BASE, USER_DATA_WINDOW_SIZE)) return 0;
+
+    current = syscall_user_owner_process();
+    if (!current || current->kind != PROCESS_KIND_USER || !current->user_space.valid) return 1;
+
+    end = addr + (uintptr_t)len;
+    if (end < addr) return 0;
+    for (uint32_t i = 0; i < current->user_space.mapping_count; i++) {
+        const exec_mapping_t* mapping = &current->user_space.mappings[i];
+        uintptr_t map_base = (uintptr_t)mapping->virt_base;
+        uintptr_t map_end = map_base + (uintptr_t)mapping->page_count * SYSCALL_USER_PAGE_SIZE;
+
+        if (map_end < map_base) return 0;
+        if (addr >= map_base && end <= map_end) {
+            return (mapping->flags & PAGING_FLAG_WRITE) != 0U;
+        }
+    }
+    return 0;
 }
 
 int copy_from_user(void* dst, const void* user_src, uint32_t len) {
@@ -799,9 +834,13 @@ void syscall_FS_MKDIR(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
 
     char path[SYSCALL_USER_PATH_MAX];
 
-    syscall_set_result(frame, copy_string_from_user(path, (const char*)arg0, sizeof(path)) == 0
-                                  ? fs_create_dir(path)
-                                  : -1);
+    if (copy_string_from_user(path, (const char*)arg0, sizeof(path)) != 0) {
+        syscall_set_result(frame, -1);
+    } else if (syscall_path_is_current_dir(path)) {
+        syscall_set_result(frame, 0);
+    } else {
+        syscall_set_result(frame, fs_create_dir(path));
+    }
 }
 
 void syscall_FS_DELETE(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
@@ -1790,8 +1829,15 @@ void syscall_MKDIRAT(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
     char path[SYSCALL_USER_PATH_MAX];
     char resolved_path[SYSCALL_USER_PATH_MAX];
 
-    if (copy_string_from_user(path, (const char*)arg1, sizeof(path)) != 0 ||
-        syscall_resolve_at_path((int)arg0, path, resolved_path, sizeof(resolved_path)) != 0) {
+    if (copy_string_from_user(path, (const char*)arg1, sizeof(path)) != 0) {
+        syscall_set_result(frame, -1);
+        return;
+    }
+    if (syscall_path_is_current_dir(path)) {
+        syscall_set_result(frame, 0);
+        return;
+    }
+    if (syscall_resolve_at_path((int)arg0, path, resolved_path, sizeof(resolved_path)) != 0) {
         syscall_set_result(frame, -1);
         return;
     }
