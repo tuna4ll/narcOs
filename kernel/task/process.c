@@ -626,8 +626,12 @@ int process_snapshot(process_snapshot_entry_t* out_entries, int max_entries) {
     if (!out_entries || max_entries <= 0) return -1;
     for (int i = 0; i < MAX_PROCESSES && count < max_entries; i++) {
         process_t* proc = &process_table[i];
+        uint32_t page_count = 0;
 
         if (proc->state == PROC_UNUSED) continue;
+        for (uint32_t m = 0; m < proc->user_space.mapping_count; m++) {
+            page_count += proc->user_space.mappings[m].page_count;
+        }
         memset(&out_entries[count], 0, sizeof(out_entries[count]));
         out_entries[count].pid = proc->pid;
         out_entries[count].parent_pid = proc->parent_pid;
@@ -635,6 +639,7 @@ int process_snapshot(process_snapshot_entry_t* out_entries, int max_entries) {
         out_entries[count].kind = (int)proc->kind;
         out_entries[count].exit_code = proc->exit_code;
         out_entries[count].flags = proc->flags;
+        out_entries[count].memory_bytes = page_count * 4096U;
         strncpy(out_entries[count].name, proc->name, sizeof(out_entries[count].name) - 1U);
         strncpy(out_entries[count].image_path, proc->image_path, sizeof(out_entries[count].image_path) - 1U);
         count++;

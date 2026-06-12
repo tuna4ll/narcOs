@@ -100,7 +100,7 @@ static USER_CODE void user_gui_fill_rect_alpha(user_gui_surface_t* surface, int 
     int x_end;
     int y_end;
 
-    if (!surface || alpha <= 0) return;
+    if (!surface || !surface->pixels || alpha <= 0) return;
     if (alpha >= 255) {
         user_gui_fill_rect(surface, x, y, w, h, color);
         return;

@@ -13,8 +13,19 @@ typedef struct {
     int kind;
     int exit_code;
     uint32_t flags;
+    uint32_t memory_bytes;
     char name[PROCESS_SNAPSHOT_NAME_LEN];
     char image_path[PROCESS_SNAPSHOT_IMAGE_LEN];
 } process_snapshot_entry_t;
+
+typedef struct {
+    uint32_t size;
+    uint64_t installed_memory_bytes;
+    uint64_t total_memory_bytes;
+    uint64_t used_memory_bytes;
+    uint64_t free_memory_bytes;
+    uint32_t process_count;
+    uint32_t uptime_ticks;
+} system_info_t;
 
 #endif

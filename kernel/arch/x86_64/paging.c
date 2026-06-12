@@ -65,10 +65,14 @@ static uint64_t heap_pts[X64_HEAP_PT_COUNT][512] __attribute__((aligned(4096)));
 static uint64_t vm_pts[X64_VM_WINDOW_PT_COUNT][512] __attribute__((aligned(4096)));
 static uint64_t user_pts[X64_USER_WINDOW_PT_COUNT][512] __attribute__((aligned(4096)));
 static uint8_t frame_bitmap[X64_BITMAP_SIZE];
+static uint8_t usable_frame_bitmap[X64_BITMAP_SIZE];
 static uint8_t vm_slot_bitmap[X64_VM_WINDOW_PAGE_COUNT / 8ULL];
 
 static uint64_t total_frames = 0;
 static uint64_t used_frames = 0;
+static uint64_t installed_frames = 0;
+static uint64_t usable_frames = 0;
+static uint64_t free_usable_frames = 0;
 static uint64_t managed_phys_limit = 0;
 static x64_heap_block_t* heap_head = 0;
 
@@ -149,19 +153,36 @@ static void x64_frame_mark(uint64_t frame, int used) {
     uint8_t mask;
     uint8_t* slot;
     int was_used;
+    int is_usable;
 
     if (frame >= X64_MAX_FRAMES) return;
     mask = (uint8_t)(1U << (frame & 7ULL));
     slot = &frame_bitmap[frame >> 3ULL];
     was_used = (*slot & mask) != 0U;
+    is_usable = (usable_frame_bitmap[frame >> 3ULL] & mask) != 0U;
 
     if (used && !was_used) {
         *slot |= mask;
         used_frames++;
+        if (is_usable && free_usable_frames != 0ULL) free_usable_frames--;
     } else if (!used && was_used) {
         *slot &= (uint8_t)~mask;
         used_frames--;
+        if (is_usable) free_usable_frames++;
     }
+}
+
+static void x64_frame_set_usable(uint64_t frame) {
+    uint8_t mask;
+    uint8_t* slot;
+
+    if (frame >= X64_MAX_FRAMES) return;
+    mask = (uint8_t)(1U << (frame & 7ULL));
+    slot = &usable_frame_bitmap[frame >> 3ULL];
+    if ((*slot & mask) != 0U) return;
+    *slot |= mask;
+    usable_frames++;
+    if ((frame_bitmap[frame >> 3ULL] & mask) == 0U) free_usable_frames++;
 }
 
 static void x64_reserve_range(uint64_t start, uint64_t end) {
@@ -182,13 +203,20 @@ static void x64_free_usable_ranges(void) {
     x64_e820_entry_t* entries = (x64_e820_entry_t*)X64_E820_DATA_PTR;
     uint64_t fallback_limit = X64_LEGACY_FALLBACK_RAM;
 
-    for (uint64_t i = 0; i < X64_BITMAP_SIZE; i++) frame_bitmap[i] = 0xFFU;
+    for (uint64_t i = 0; i < X64_BITMAP_SIZE; i++) {
+        frame_bitmap[i] = 0xFFU;
+        usable_frame_bitmap[i] = 0U;
+    }
     total_frames = fallback_limit / X64_PAGE_SIZE;
     used_frames = total_frames;
+    installed_frames = total_frames;
+    usable_frames = 0;
+    free_usable_frames = 0;
     managed_phys_limit = fallback_limit;
 
     if (entry_count == 0U) {
         for (uint64_t frame = X64_RESERVED_PHYS_END / X64_PAGE_SIZE; frame < total_frames; frame++) {
+            x64_frame_set_usable(frame);
             x64_frame_mark(frame, 0);
         }
         return;
@@ -196,14 +224,19 @@ static void x64_free_usable_ranges(void) {
 
     {
         uint64_t max_addr = 0;
+        uint64_t installed_bytes = 0;
         for (uint16_t i = 0; i < entry_count; i++) {
             uint64_t region_end;
 
             if (entries[i].type != 1U) continue;
             region_end = entries[i].base_addr + entries[i].length;
+            installed_bytes += entries[i].length;
             if (region_end > max_addr) max_addr = region_end;
         }
 
+        if (installed_bytes != 0ULL) {
+            installed_frames = (installed_bytes + X64_PAGE_SIZE - 1ULL) / X64_PAGE_SIZE;
+        }
         if (max_addr != 0ULL) {
             managed_phys_limit = x64_clamp_managed_phys_limit(max_addr);
             total_frames = managed_phys_limit / X64_PAGE_SIZE;
@@ -212,6 +245,8 @@ static void x64_free_usable_ranges(void) {
                 managed_phys_limit = fallback_limit;
             }
             used_frames = total_frames;
+            usable_frames = 0;
+            free_usable_frames = 0;
         }
     }
 
@@ -230,6 +265,7 @@ static void x64_free_usable_ranges(void) {
 
         x64_reserve_range(region_start, region_end);
         for (uint64_t frame = region_start / X64_PAGE_SIZE; frame < region_end / X64_PAGE_SIZE; frame++) {
+            x64_frame_set_usable(frame);
             x64_frame_mark(frame, 0);
         }
     }
@@ -621,10 +657,14 @@ uint64_t x64_paging_kernel_vm_size(void) {
     return X64_VM_WINDOW_SIZE;
 }
 
+uint64_t x64_paging_installed_frames(void) {
+    return installed_frames;
+}
+
 uint64_t x64_paging_total_frames(void) {
-    return total_frames;
+    return usable_frames;
 }
 
 uint64_t x64_paging_used_frames(void) {
-    return used_frames;
+    return usable_frames >= free_usable_frames ? usable_frames - free_usable_frames : 0ULL;
 }

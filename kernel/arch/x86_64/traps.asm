@@ -134,9 +134,16 @@ extern user_current_task_frame_ptr
 %1:
     PUSH_GPRS
     lea rax, [rsp + X64_FRAME_GPR_SIZE]
+    mov rbx, [rax + 16]
+    test bl, 3
+    jz %%kernel_frame
+    push qword [rax + 40]
+    push qword [rax + 32]
+    jmp %%frame_tail
+%%kernel_frame:
     push qword 0
-    lea rbx, [rax + 32]
-    push rbx
+    push qword 0
+%%frame_tail:
     push qword [rax + 24]
     push qword [rax + 16]
     push qword [rax + 8]
@@ -144,12 +151,16 @@ extern user_current_task_frame_ptr
     push qword %2
     CALL_DISPATCH
     lea rax, [rsp + X64_FRAME_META_SIZE + X64_FRAME_GPR_SIZE]
-    mov rbx, [rsp + 16]
+    mov rbx, [rsp + TF_RIP]
     mov [rax + 8], rbx
-    mov rbx, [rsp + 24]
+    mov rbx, [rsp + TF_CS]
     mov [rax + 16], rbx
-    mov rbx, [rsp + 32]
+    mov rbx, [rsp + TF_RFLAGS]
     mov [rax + 24], rbx
+    mov rbx, [rsp + TF_USER_RSP]
+    mov [rax + 32], rbx
+    mov rbx, [rsp + TF_USER_SS]
+    mov [rax + 40], rbx
     add rsp, X64_FRAME_META_SIZE
     POP_GPRS
     add rsp, 8

@@ -30,6 +30,7 @@ uint64_t x64_paging_heap_base(void);
 uint64_t x64_paging_heap_size(void);
 uint64_t x64_paging_kernel_vm_base(void);
 uint64_t x64_paging_kernel_vm_size(void);
+uint64_t x64_paging_installed_frames(void);
 uint64_t x64_paging_total_frames(void);
 uint64_t x64_paging_used_frames(void);
 

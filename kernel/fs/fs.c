@@ -259,6 +259,7 @@ static int fs_storage_write_sector(uint32_t lba, const uint8_t* buffer) {
     X(explorer) \
     X(narcpad) \
     X(settings) \
+    X(taskmgr) \
     X(snake) \
     X(core_tools)
 

@@ -218,6 +218,11 @@ static inline int user_process_snapshot(process_snapshot_entry_t* entries, int m
     return (int)user_syscall2(SYS_PROCESS_SNAPSHOT, (uintptr_t)entries, (uintptr_t)max_entries);
 }
 
+static inline int user_system_info(system_info_t* out_info) {
+    if (out_info) out_info->size = sizeof(*out_info);
+    return (int)user_syscall1(SYS_SYSTEM_INFO, (uintptr_t)out_info);
+}
+
 static inline void* user_malloc(size_t size) {
     return (void*)(uintptr_t)user_syscall1(SYS_MALLOC, (uintptr_t)size);
 }

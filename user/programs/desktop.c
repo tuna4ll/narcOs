@@ -19,10 +19,10 @@
 #define MENU_Y (TASKBAR_HEIGHT + UI_SPACE_3)
 #define MENU_W 348
 #define MENU_ITEM_H 42
-#define MENU_ITEMS 7
+#define MENU_ITEMS 8
 #define MENU_HEADER_H 52
 #define MENU_SECTION_H UI_MENU_SECTION_H
-#define MENU_PRIMARY_ITEMS 5
+#define MENU_PRIMARY_ITEMS 6
 #define CTX_MENU_W 196
 #define CTX_MENU_ITEM_H 26
 #define CTX_MENU_ITEMS 4
@@ -133,7 +133,8 @@ enum {
     DESKTOP_ICON_KIND_DIR = 3,
     DESKTOP_ICON_KIND_SNAKE = 4,
     DESKTOP_ICON_KIND_SETTINGS = 5,
-    DESKTOP_ICON_KIND_DOOM = 6
+    DESKTOP_ICON_KIND_DOOM = 6,
+    DESKTOP_ICON_KIND_TASKMGR = 7
 };
 
 enum {
@@ -158,6 +159,7 @@ static char desktop_last_launch_path[256];
 static const menu_item_t menu_items[MENU_ITEMS] = {
     {"Open Explorer", "Browse the desktop folder"},
     {"Open Settings", "Launch the system settings app"},
+    {"Task Manager", "View processes and memory"},
     {"Run Snake", "Launch the Snake game"},
     {"Run Doom", "Launch the Doom port"},
     {"Open Readme", "Launch NarcPad with the desktop readme"},
@@ -168,6 +170,7 @@ static const menu_item_t menu_items[MENU_ITEMS] = {
 static const char* context_menu_items[CTX_MENU_ITEMS] = {"New File", "New Folder", "Refresh", "Settings"};
 static const int menu_item_icons[MENU_ITEMS] = {
     USER_GUI_ICON_EXPLORER,
+    USER_GUI_ICON_SETTINGS,
     USER_GUI_ICON_SETTINGS,
     USER_GUI_ICON_SNAKE,
     USER_GUI_ICON_DOOM,
@@ -509,6 +512,7 @@ static int desktop_icon_to_user_gui_icon(int kind) {
         case DESKTOP_ICON_KIND_THIS_PC: return USER_GUI_ICON_EXPLORER;
         case DESKTOP_ICON_KIND_DIR: return USER_GUI_ICON_FOLDER;
         case DESKTOP_ICON_KIND_SETTINGS: return USER_GUI_ICON_SETTINGS;
+        case DESKTOP_ICON_KIND_TASKMGR: return USER_GUI_ICON_SETTINGS;
         case DESKTOP_ICON_KIND_SNAKE: return USER_GUI_ICON_SNAKE;
         case DESKTOP_ICON_KIND_DOOM: return USER_GUI_ICON_DOOM;
         case DESKTOP_ICON_KIND_FILE: return USER_GUI_ICON_FILE;
@@ -578,6 +582,7 @@ static const uint8_t* desktop_bitmap_icon_for_kind(int kind) {
         case DESKTOP_ICON_KIND_FILE: return desktop_text_icon_rgba();
         case DESKTOP_ICON_KIND_DIR: return desktop_folder_icon_rgba();
         case DESKTOP_ICON_KIND_SETTINGS: return desktop_settings_icon_rgba();
+        case DESKTOP_ICON_KIND_TASKMGR: return desktop_settings_icon_rgba();
         case DESKTOP_ICON_KIND_SNAKE: return desktop_snake_icon_rgba();
         case DESKTOP_ICON_KIND_DOOM: return desktop_doom_icon_rgba();
         default: return 0;
@@ -1261,6 +1266,16 @@ static int load_desktop_icons(desktop_icon_entry_t* entries, int max_entries, in
         count++;
     }
 
+    if (count < max_entries) {
+        entries[count].kind = DESKTOP_ICON_KIND_TASKMGR;
+        entries[count].node_idx = -1;
+        desktop_icon_rect(count, screen_w, screen_h, &entries[count].x, &entries[count].y);
+        entries[count].accent = 0x7FB3FF;
+        copy_icon_label(entries[count].label, sizeof(entries[count].label), "TaskMgr");
+        entries[count].path[0] = '\0';
+        count++;
+    }
+
     if (desktop_dir >= 0) {
         for (int idx = 0; idx < MAX_FILES && count < max_entries; idx++) {
             disk_fs_node_t node;
@@ -1343,6 +1358,11 @@ static void activate_desktop_icon(const desktop_icon_entry_t* icon, char* status
             argv[0] = "/bin/settings";
             rc = user_spawn("/bin/settings", argv, 1U);
             copy_text(status_text, status_size, rc >= 0 ? "Settings opened" : "Settings open failed");
+            break;
+        case DESKTOP_ICON_KIND_TASKMGR:
+            argv[0] = "/bin/taskmgr";
+            rc = user_spawn("/bin/taskmgr", argv, 1U);
+            copy_text(status_text, status_size, rc >= 0 ? "Task Manager opened" : "Task Manager open failed");
             break;
         case DESKTOP_ICON_KIND_DIR:
             argv[0] = "/bin/explorer";
@@ -1498,6 +1518,7 @@ static void copy_title_label(char* dst, size_t dst_size, const char* src) {
 static void launch_menu_action(int item_idx, char* status_text, size_t status_size) {
     static const char* explorer_argv[] = {"/bin/explorer", "/home/user/Desktop"};
     static const char* settings_argv[] = {"/bin/settings"};
+    static const char* taskmgr_argv[] = {"/bin/taskmgr"};
     static const char* snake_argv[] = {"/bin/snake"};
     static const char* doom_argv[] = {"/bin/doom"};
     static const char* narcpad_readme_argv[] = {"/bin/narcpad", "/home/user/Desktop/readme.txt"};
@@ -1519,22 +1540,26 @@ static void launch_menu_action(int item_idx, char* status_text, size_t status_si
             copy_text(status_text, status_size, rc >= 0 ? "Settings opened" : "Settings open failed");
             break;
         case 2:
+            rc = user_spawn("/bin/taskmgr", taskmgr_argv, 1U);
+            copy_text(status_text, status_size, rc >= 0 ? "Task Manager opened" : "Task Manager open failed");
+            break;
+        case 3:
             rc = user_spawn("/bin/snake", snake_argv, 1U);
             copy_text(status_text, status_size, rc >= 0 ? "Snake opened" : "Snake open failed");
             break;
-        case 3:
+        case 4:
             rc = user_spawn("/bin/doom", doom_argv, 1U);
             copy_text(status_text, status_size, rc >= 0 ? "Doom opened" : "Doom open failed");
             break;
-        case 4:
+        case 5:
             rc = user_spawn("/bin/narcpad", narcpad_readme_argv, 2U);
             copy_text(status_text, status_size, rc >= 0 ? "Readme opened in NarcPad" : "Readme open failed");
             break;
-        case 5:
+        case 6:
             rc = user_spawn("/bin/hello", hello_argv, 1U);
             copy_text(status_text, status_size, rc >= 0 ? "Spawned /bin/hello" : "Spawn /bin/hello failed");
             break;
-        case 6:
+        case 7:
             rc = user_spawn("/bin/neofetch", neofetch_argv, 1U);
             copy_text(status_text, status_size, rc >= 0 ? "Spawned /bin/neofetch" : "Spawn /bin/neofetch failed");
             break;

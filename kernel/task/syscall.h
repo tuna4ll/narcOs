@@ -139,6 +139,7 @@ typedef struct {
 #define SYS_MMAP 91
 #define SYS_MUNMAP 92
 #define SYS_MPROTECT 93
+#define SYS_SYSTEM_INFO 94
 
 #define NARCOS_AT_FDCWD (-100)
 

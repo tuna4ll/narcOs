@@ -62,6 +62,10 @@ uint64_t paging_kernel_vm_size(void) {
     return x64_paging_kernel_vm_size();
 }
 
+uint64_t paging_installed_frames(void) {
+    return x64_paging_installed_frames();
+}
+
 uint64_t paging_total_frames(void) {
     return x64_paging_total_frames();
 }

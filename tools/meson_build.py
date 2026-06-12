@@ -10,13 +10,13 @@ from pathlib import Path
 USER_PROGRAMS = [
     "hello", "ps", "cat", "echo", "kill", "proc_test", "pipe_test",
     "credits", "neofetch", "desktop", "explorer", "narcpad", "settings",
-    "snake", "doom", "core_tools", "tls_tools", "posix_smoke", "args_smoke",
+    "taskmgr", "snake", "doom", "core_tools", "tls_tools", "posix_smoke", "args_smoke",
     "clear", "date", "dns", "help", "http", "ls", "net", "netdemo",
     "ping", "pwd", "time", "uptime", "ver",
 ]
 USER_EMBED_PROGRAMS = [
     "neofetch", "credits", "desktop", "explorer", "narcpad", "settings",
-    "snake", "core_tools",
+    "taskmgr", "snake", "core_tools",
 ]
 FS_SEED_PROGRAMS = [p for p in USER_PROGRAMS if p not in ("doom", "posix_smoke")]
 USER_TLS_PROGRAMS = ["tls_tools"]
@@ -230,6 +230,8 @@ class Build:
             flags += [
                 "-mno-red-zone", "-mgeneral-regs-only", "-mno-mmx", "-mno-sse",
                 "-mno-sse2", "-msoft-float", "-O2", "-fomit-frame-pointer",
+                "-falign-functions=1", "-falign-labels=1",
+                "-falign-loops=1", "-falign-jumps=1",
             ]
         if extra:
             flags += extra
@@ -252,6 +254,9 @@ class Build:
             flags += [
                 "-mno-red-zone", "-mgeneral-regs-only", "-mno-mmx", "-mno-sse",
                 "-mno-sse2", "-msoft-float", "-O2", "-fomit-frame-pointer",
+                "-Wa,-mtune=i386",
+                "-falign-functions=1", "-falign-labels=1",
+                "-falign-loops=1", "-falign-jumps=1",
             ]
         if doom:
             doom_flags = [
@@ -443,7 +448,10 @@ class Build:
         self.assemble(arch, cfg["crt_src"], cfg["crt_obj"])
 
         program_objects = {}
-        common_deps = self.user_include_headers + self.user_headers + self.kernel_headers + [musl["libc"]]
+        common_deps = (
+            self.user_include_headers + self.user_headers + self.kernel_headers +
+            [musl["libc"], self.src / "tools/meson_build.py"]
+        )
         for program in USER_PROGRAMS:
             src = self.src / f"user/programs/{program}.c"
             obj = self.obj_dir(arch) / f"user/programs/{program}.o"
@@ -633,7 +641,11 @@ class Build:
         cfg = self.arch_cfg(arch)
         layout = self.payload_layout(arch)
         image = cfg["image"]
-        inputs = [boot, stage2, manifest, cfg["kernel_elf"], *binaries.values(), self.src / "tools/seed_narcos_fs.py"]
+        inputs = [
+            boot, stage2, manifest, cfg["kernel_elf"], *binaries.values(),
+            self.src / "tools/meson_build.py",
+            self.src / "tools/seed_narcos_fs.py",
+        ]
         if self.doom1_wad.exists():
             inputs.append(self.doom1_wad)
         if not newer(image, inputs):

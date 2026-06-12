@@ -1971,6 +1971,29 @@ void syscall_PROCESS_SNAPSHOT(arch_trap_frame_t *frame, arch_syscall_state_t *re
     }
 }
 
+void syscall_SYSTEM_INFO(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
+    uintptr_t arg0 = (uintptr_t)regs->arg0;
+    system_info_t info;
+    process_snapshot_entry_t entries[16];
+    uint64_t total;
+    uint64_t used;
+    int count;
+
+    memset(&info, 0, sizeof(info));
+    info.installed_memory_bytes = paging_installed_frames() * 4096ULL;
+    total = paging_total_frames() * 4096ULL;
+    used = paging_used_frames() * 4096ULL;
+    info.size = sizeof(info);
+    info.total_memory_bytes = total;
+    info.used_memory_bytes = used;
+    info.free_memory_bytes = total >= used ? total - used : 0ULL;
+    count = process_snapshot(entries, (int)(sizeof(entries) / sizeof(entries[0])));
+    info.process_count = count > 0 ? (uint32_t)count : 0U;
+    info.uptime_ticks = timer_ticks;
+    reactivate_current_user_space();
+    syscall_set_result(frame, copy_to_user((void*)arg0, &info, sizeof(info)) == 0 ? 0 : -1);
+}
+
 void syscall_MOUSE_GET_STATE(arch_trap_frame_t *frame, arch_syscall_state_t *regs) {
     uintptr_t arg0 = (uintptr_t)regs->arg0;
     mouse_state_t state;
@@ -2112,6 +2135,7 @@ static syscall_handler_routine syscalltab[] = {
     syscall_MMAP,
     syscall_MUNMAP,
     syscall_MPROTECT,
+    syscall_SYSTEM_INFO,
 };
 
 void syscall_handler(arch_trap_frame_t* frame) {

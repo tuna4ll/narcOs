@@ -32,6 +32,7 @@ uint64_t paging_kernel_stack_base(void);
 uint64_t paging_kernel_stack_size(void);
 uint64_t paging_kernel_vm_base(void);
 uint64_t paging_kernel_vm_size(void);
+uint64_t paging_installed_frames(void);
 uint64_t paging_total_frames(void);
 uint64_t paging_used_frames(void);
 
