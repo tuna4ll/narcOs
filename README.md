@@ -47,6 +47,8 @@ Limine is fetched automatically as a pinned binary release on the first image bu
 make run
 ```
 
+`make run` boots with SeaBIOS and keeps Limine in **BIOS VGA text mode** (`graphics: no`). The visible console is the classic 80x25 buffer at `0xB8000`.
+
 `make run` opens QEMU with a standard VGA device. Kernel logs and userspace output are written to the 80x25 VGA text buffer, not to the terminal. The VM intentionally stays open after the demo userspace calls `exit()` so the final output remains visible.
 
 For early serial debugging, use:

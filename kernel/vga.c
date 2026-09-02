@@ -1,5 +1,6 @@
 #include <kernel/io.h>
 #include <kernel/mm.h>
+#include <kernel/serial.h>
 #include <kernel/vga.h>
 #include <stdint.h>
 
@@ -65,6 +66,10 @@ void vga_clear(void) {
 }
 
 void vga_putc(char c) {
+    /* Mirror the visible console to COM1 so make run-serial can diagnose
+       failures without changing the kernel's normal VGA output path. */
+    serial_putc(c);
+
     if (!vga_buffer) return;
 
     if (c == '\n') {
