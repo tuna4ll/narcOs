@@ -27,6 +27,13 @@ static volatile struct limine_hhdm_request hhdm_request = {
     .response = 0,
 };
 
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_framebuffer_request framebuffer_request = {
+    .id = LIMINE_FRAMEBUFFER_REQUEST_ID,
+    .revision = 0,
+    .response = 0,
+};
+
 __attribute__((used, section(".limine_requests_end")))
 static volatile uint64_t requests_end[] = LIMINE_REQUESTS_END_MARKER;
 
@@ -38,14 +45,16 @@ void _start(void) {
     serial_init();
 
     if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision) ||
-        !memmap_request.response || !hhdm_request.response) {
+        !memmap_request.response || !hhdm_request.response || !framebuffer_request.response) {
         serial_puts("[panic] required Limine features unavailable\n");
         for (;;) __asm__ volatile ("hlt");
     }
 
     mm_init(memmap_request.response, hhdm_request.response->offset);
-    vga_init();
-    vga_puts("[boot] Limine handoff OK\n");
+    if (vga_init(framebuffer_request.response) != 0) {
+        for (;;) __asm__ volatile ("cli; hlt");
+    }
+    vga_puts("[boot] Limine framebuffer ready\n");
 
     gdt_init((uint64_t)(uintptr_t)(kernel_stack + sizeof(kernel_stack)));
     idt_init();

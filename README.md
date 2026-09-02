@@ -6,7 +6,7 @@ A small x86_64 kernel template for TurkOsdev. It boots with Limine, initializes 
 
 - Limine boot protocol (x86_64)
 - higher-half kernel
-- VGA 80x25 text console mapped at physical `0xB8000`
+- Limine RGB framebuffer console with an 8x16 bitmap font
 - COM1 serial logger for early/debug failures
 - tiny physical page allocator from the Limine memory map
 - user page mappings in the active x86_64 page tables
@@ -15,12 +15,12 @@ A small x86_64 kernel template for TurkOsdev. It boots with Limine, initializes 
 - real CPL3 transition with `iretq`
 - `/userland/hello.c`
 - tiny libc (`write`, `puts`, `strlen`, `exit`)
-- QEMU target that opens a graphical VGA window
+- QEMU target that opens a graphical framebuffer window
 
 Expected output:
 
 ```text
-[boot] Limine handoff OK
+[boot] Limine framebuffer ready
 [kernel] ring 0 initialized
 [user] entering ring 3
 Hello from userspace
@@ -47,9 +47,9 @@ Limine is fetched automatically as a pinned binary release on the first image bu
 make run
 ```
 
-`make run` boots with SeaBIOS and keeps Limine in **BIOS VGA text mode** (`graphics: no`). The visible console is the classic 80x25 buffer at `0xB8000`.
+`make run` boots with SeaBIOS and requests a Limine RGB framebuffer. The kernel renders text directly into the framebuffer, so it does not depend on legacy VGA mode 3 or `0xB8000`.
 
-`make run` opens QEMU with a standard VGA device. Kernel logs and userspace output are written to the 80x25 VGA text buffer, not to the terminal. The VM intentionally stays open after the demo userspace calls `exit()` so the final output remains visible.
+`make run` opens QEMU with a standard VGA-compatible display device. Kernel logs and userspace output are rendered into the Limine framebuffer, not to the host terminal. The VM intentionally stays open after the demo userspace calls `exit()` so the final output remains visible.
 
 For early serial debugging, use:
 
@@ -91,7 +91,7 @@ scripts/
 
 This is intentionally tiny and educational, not POSIX.
 
-- `rax = 1`, `rdi = buffer`, `rsi = length` -> write to the kernel VGA console
+- `rax = 1`, `rdi = buffer`, `rsi = length` -> write to the kernel framebuffer console
 - `rax = 60`, `rdi = status` -> terminate the demo userspace task
 
 The interrupt gate at vector `0x80` has DPL 3. On entry from userspace, the CPU switches to the ring-0 stack configured in the TSS before the kernel dispatches the syscall.
@@ -99,3 +99,4 @@ The interrupt gate at vector `0x80` has DPL 3. On entry from userspace, the CPU 
 ## Notes
 
 This repository is a starting point, not a complete OS. It intentionally omits scheduling, ELF loading at runtime, copy-from-user fault recovery, a general VM subsystem, SMP, and interrupt-controller setup. The userspace image is linked separately and embedded into the kernel image during the build so the privilege-boundary example stays easy to follow.
+
