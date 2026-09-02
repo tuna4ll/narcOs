@@ -4,7 +4,7 @@ BUILD := build
 DIST := dist
 CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2 -I kernel/include
 
-BASE_O := $(BUILD)/kernel/main.o $(BUILD)/kernel/serial.o $(BUILD)/kernel/lib/string.o
+BASE_O := $(BUILD)/kernel/main.o $(BUILD)/kernel/serial.o $(BUILD)/kernel/lib/string.o $(BUILD)/kernel/arch/x86_64/gdt.o $(BUILD)/kernel/arch/x86_64/gdt_load.o
 
 .PHONY: all kernel limine iso run clean distclean
 all: iso
@@ -12,6 +12,10 @@ all: iso
 $(BUILD)/kernel/%.o: kernel/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD)/kernel/arch/x86_64/%.o: kernel/arch/x86_64/%.S
+	@mkdir -p $(dir $@)
+	$(CC) -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -c $< -o $@
 
 $(BUILD)/kernel.elf: $(BASE_O) kernel/linker.ld
 	$(LD) -nostdlib -static -z max-page-size=0x1000 -T kernel/linker.ld $(BASE_O) -o $@
