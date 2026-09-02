@@ -12,7 +12,7 @@ enter_userspace:
     pushq %rsi
     pushfq
     popq %rax
-    orq $0x200, %rax
+    andq $~0x200, %rax
     pushq %rax
     pushq $0x23
     pushq %rdi
