@@ -4,7 +4,7 @@ BUILD := build
 DIST := dist
 CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2 -I kernel/include
 
-BASE_O := $(BUILD)/kernel/main.o $(BUILD)/kernel/serial.o $(BUILD)/kernel/lib/string.o $(BUILD)/kernel/arch/x86_64/gdt.o $(BUILD)/kernel/arch/x86_64/gdt_load.o
+BASE_O := $(BUILD)/kernel/main.o $(BUILD)/kernel/serial.o $(BUILD)/kernel/lib/string.o $(BUILD)/kernel/arch/x86_64/gdt.o $(BUILD)/kernel/arch/x86_64/gdt_load.o $(BUILD)/kernel/arch/x86_64/idt.o $(BUILD)/kernel/arch/x86_64/syscall.o $(BUILD)/kernel/mm/mm.o $(BUILD)/kernel/syscall.o
 
 .PHONY: all kernel limine iso run clean distclean
 all: iso
