@@ -1,24 +1,52 @@
-CC ?= cc
-LD ?= ld
+CC      ?= cc
+LD      ?= ld
+OBJCOPY ?= objcopy
+
 BUILD := build
-DIST := dist
-CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2 -I kernel/include
+DIST  := dist
 
-BASE_O := $(BUILD)/kernel/main.o $(BUILD)/kernel/serial.o $(BUILD)/kernel/lib/string.o $(BUILD)/kernel/arch/x86_64/gdt.o $(BUILD)/kernel/arch/x86_64/gdt_load.o $(BUILD)/kernel/arch/x86_64/idt.o $(BUILD)/kernel/arch/x86_64/syscall.o $(BUILD)/kernel/mm/mm.o $(BUILD)/kernel/syscall.o
+CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
+          -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2 \
+          -I kernel/include
+ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel
+USER_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
+               -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=large -mno-sse -mno-sse2 -I userland/include
 
-.PHONY: all kernel limine iso run clean distclean
+KERNEL_C := $(shell find kernel -name '*.c' | sort)
+KERNEL_S := $(filter-out kernel/user_blob.S,$(shell find kernel -name '*.S' | sort))
+KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S)) $(BUILD)/kernel/user_blob.o
+USER_C   := $(shell find userland -name '*.c' | sort)
+USER_O   := $(patsubst %.c,$(BUILD)/%.o,$(USER_C))
+
+.PHONY: all kernel userland iso run clean distclean limine
 all: iso
+
+$(BUILD)/userland/%.o: userland/%.c
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(BUILD)/userland.elf: $(USER_O) userland/linker.ld
+	$(LD) -nostdlib -static -z max-page-size=0x1000 -T userland/linker.ld $(USER_O) -o $@
+
+$(BUILD)/userland.bin: $(BUILD)/userland.elf
+	$(OBJCOPY) -O binary $< $@
+
+userland: $(BUILD)/userland.bin
 
 $(BUILD)/kernel/%.o: kernel/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD)/kernel/arch/x86_64/%.o: kernel/arch/x86_64/%.S
+$(BUILD)/kernel/%.o: kernel/%.S
 	@mkdir -p $(dir $@)
-	$(CC) -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -c $< -o $@
+	$(CC) $(ASFLAGS) -c $< -o $@
 
-$(BUILD)/kernel.elf: $(BASE_O) kernel/linker.ld
-	$(LD) -nostdlib -static -z max-page-size=0x1000 -T kernel/linker.ld $(BASE_O) -o $@
+$(BUILD)/kernel/user_blob.o: kernel/user_blob.S $(BUILD)/userland.bin
+	@mkdir -p $(dir $@)
+	$(CC) $(ASFLAGS) -c $< -o $@
+
+$(BUILD)/kernel.elf: $(KERNEL_O) kernel/linker.ld
+	$(LD) -nostdlib -static -z max-page-size=0x1000 -T kernel/linker.ld $(KERNEL_O) -o $@
 
 kernel: $(BUILD)/kernel.elf
 
@@ -33,11 +61,18 @@ iso: $(BUILD)/kernel.elf limine
 	cp limine.conf $(BUILD)/iso_root/boot/limine/limine.conf
 	cp limine/limine-bios.sys limine/limine-bios-cd.bin $(BUILD)/iso_root/boot/limine/
 	cp limine/BOOTX64.EFI $(BUILD)/iso_root/EFI/BOOT/
-	xorriso -as mkisofs -R -r -J -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table -hfsplus -apm-block-size 2048 --efi-boot EFI/BOOT/BOOTX64.EFI -efi-boot-part --efi-boot-image --protective-msdos-label $(BUILD)/iso_root -o $(DIST)/kernel-template.iso
+	xorriso -as mkisofs -R -r -J \
+		-b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table \
+		-hfsplus -apm-block-size 2048 --efi-boot EFI/BOOT/BOOTX64.EFI \
+		-efi-boot-part --efi-boot-image --protective-msdos-label \
+		$(BUILD)/iso_root -o $(DIST)/kernel-template.iso
 	./limine/limine bios-install $(DIST)/kernel-template.iso
 
 run: iso
-	qemu-system-x86_64 -M q35 -m 256M -cdrom $(DIST)/kernel-template.iso -serial stdio -display none -no-reboot -no-shutdown
+	@command -v qemu-system-x86_64 >/dev/null || { echo 'error: qemu-system-x86_64 is required'; exit 1; }
+	qemu-system-x86_64 -M q35 -m 256M -cdrom $(DIST)/kernel-template.iso \
+		-serial stdio -display none -no-reboot -no-shutdown \
+		-device isa-debug-exit,iobase=0xf4,iosize=0x04
 
 clean:
 	rm -rf $(BUILD) $(DIST)
