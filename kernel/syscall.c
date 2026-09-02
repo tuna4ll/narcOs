@@ -1,6 +1,5 @@
-#include <kernel/io.h>
-#include <kernel/serial.h>
 #include <kernel/syscall.h>
+#include <kernel/vga.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -19,15 +18,20 @@ void syscall_dispatch(struct syscall_frame *frame) {
     if (frame->rax == SYS_WRITE) {
         const char *buf = (const char *)(uintptr_t)frame->rdi;
         size_t len = (size_t)frame->rsi;
-        if (user_range_ok(frame->rdi, frame->rsi)) serial_write(buf, len);
+        if (user_range_ok(frame->rdi, frame->rsi)) {
+            vga_write(buf, len);
+            frame->rax = len;
+        } else {
+            frame->rax = (uint64_t)-1;
+        }
         return;
     }
 
     if (frame->rax == SYS_EXIT) {
-        serial_puts("[kernel] userspace exited\n");
-        outb(0xf4, (uint8_t)(frame->rdi << 1 | 1));
-        for (;;) __asm__ volatile ("hlt");
+        vga_puts("[kernel] userspace exited\n");
+        for (;;) __asm__ volatile ("cli; hlt");
     }
 
-    serial_puts("[kernel] unknown syscall\n");
+    vga_puts("[kernel] unknown syscall\n");
+    frame->rax = (uint64_t)-1;
 }

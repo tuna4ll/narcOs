@@ -1,6 +1,6 @@
 #include <kernel/mm.h>
-#include <kernel/serial.h>
 #include <kernel/string.h>
+#include <kernel/vga.h>
 #include <stdint.h>
 
 #define USER_BASE       0x0000100000000000ULL
@@ -31,6 +31,6 @@ void user_start(void) {
         vmm_map_user(va, phys, VMM_WRITE);
     }
 
-    serial_puts("[user] entering ring 3\n");
+    vga_puts("[user] entering ring 3\n");
     enter_userspace(USER_BASE, USER_STACK_TOP - 16);
 }
