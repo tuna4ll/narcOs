@@ -6,7 +6,8 @@ A small x86_64 kernel template for TurkOsdev. It boots with Limine, initializes 
 
 - Limine boot protocol (x86_64)
 - higher-half kernel
-- COM1 serial logger
+- VGA 80x25 text console mapped at physical `0xB8000`
+- COM1 serial logger for early/debug failures
 - tiny physical page allocator from the Limine memory map
 - user page mappings in the active x86_64 page tables
 - GDT + 64-bit TSS with `rsp0`
@@ -14,7 +15,7 @@ A small x86_64 kernel template for TurkOsdev. It boots with Limine, initializes 
 - real CPL3 transition with `iretq`
 - `/userland/hello.c`
 - tiny libc (`write`, `puts`, `strlen`, `exit`)
-- QEMU target with deterministic serial output
+- QEMU target that opens a graphical VGA window
 
 Expected output:
 
@@ -38,12 +39,20 @@ sudo pacman -S --needed base-devel git xorriso qemu-system-x86
 sudo apt install build-essential git xorriso qemu-system-x86
 ```
 
-Limine itself is fetched automatically from the current `v12.x` branch on the first image build.
+Limine is fetched automatically as a pinned binary release on the first image build.
 
 ## Build and run
 
 ```sh
 make run
+```
+
+`make run` opens QEMU with a standard VGA device. Kernel logs and userspace output are written to the 80x25 VGA text buffer, not to the terminal. The VM intentionally stays open after the demo userspace calls `exit()` so the final output remains visible.
+
+For early serial debugging, use:
+
+```sh
+make run-serial
 ```
 
 Build only the kernel and embedded userspace without downloading Limine:
@@ -80,7 +89,7 @@ scripts/
 
 This is intentionally tiny and educational, not POSIX.
 
-- `rax = 1`, `rdi = buffer`, `rsi = length` -> write to kernel serial console
+- `rax = 1`, `rdi = buffer`, `rsi = length` -> write to the kernel VGA console
 - `rax = 60`, `rdi = status` -> terminate the demo userspace task
 
 The interrupt gate at vector `0x80` has DPL 3. On entry from userspace, the CPU switches to the ring-0 stack configured in the TSS before the kernel dispatches the syscall.

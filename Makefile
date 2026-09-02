@@ -18,7 +18,7 @@ KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) $(patsubst %.S,$(BUILD)/%.o
 USER_C   := $(shell find userland -name '*.c' | sort)
 USER_O   := $(patsubst %.c,$(BUILD)/%.o,$(USER_C))
 
-.PHONY: all kernel userland iso run clean distclean limine
+.PHONY: all kernel userland iso run run-serial clean distclean limine
 all: iso
 
 $(BUILD)/userland/%.o: userland/%.c
@@ -70,9 +70,13 @@ iso: $(BUILD)/kernel.elf limine
 
 run: iso
 	@command -v qemu-system-x86_64 >/dev/null || { echo 'error: qemu-system-x86_64 is required'; exit 1; }
-	qemu-system-x86_64 -M q35 -m 256M -cdrom $(DIST)/kernel-template.iso \
-		-serial stdio -display none -no-reboot -no-shutdown \
-		-device isa-debug-exit,iobase=0xf4,iosize=0x04
+	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/kernel-template.iso \
+		-serial none -monitor none -no-reboot -no-shutdown
+
+run-serial: iso
+	@command -v qemu-system-x86_64 >/dev/null || { echo 'error: qemu-system-x86_64 is required'; exit 1; }
+	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/kernel-template.iso \
+		-serial stdio -monitor none -no-reboot -no-shutdown
 
 clean:
 	rm -rf $(BUILD) $(DIST)
