@@ -23,7 +23,7 @@ KERNEL_C := $(shell find kernel -name '*.c' | sort)
 KERNEL_S := $(filter-out kernel/user_blob.S,$(shell find kernel -name '*.S' | sort))
 KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S)) $(BUILD)/kernel/user_blob.o
 
-.PHONY: all kernel userland musl iso run run-serial clean distclean limine
+.PHONY: all kernel userland musl iso run run-serial clean distclean limine test test-host test-qemu test-qemu-smoke
 all: iso
 
 ifeq ($(USERLAND),musl)
@@ -91,6 +91,17 @@ run-serial: iso
 	@command -v qemu-system-x86_64 >/dev/null || { echo 'error: qemu-system-x86_64 is required'; exit 1; }
 	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/kernel-template.iso \
 		-serial stdio -monitor none -no-reboot -no-shutdown
+
+test: test-host
+
+test-host:
+	./tests/host.sh
+
+test-qemu-smoke:
+	./tests/qemu.sh smoke
+
+test-qemu:
+	./tests/qemu.sh musl
 
 clean:
 	rm -rf $(BUILD) $(DIST)
