@@ -28,7 +28,16 @@ syscall_fast_entry:
     movq %rsp, %rdi
     call syscall_dispatch_fast
 
+    /* The C dispatcher is allowed to clobber all SysV caller-saved
+       registers, but userspace syscall wrappers only expect RAX plus the
+       architectural RCX/R11 clobbers. Restore the argument registers. */
     movq 0(%rsp), %rax
+    movq 8(%rsp), %rdi
+    movq 16(%rsp), %rsi
+    movq 24(%rsp), %rdx
+    movq 32(%rsp), %r10
+    movq 40(%rsp), %r8
+    movq 48(%rsp), %r9
     movq 56(%rsp), %rcx
     movq 64(%rsp), %r11
     movq 72(%rsp), %rsp

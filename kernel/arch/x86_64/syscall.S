@@ -11,5 +11,12 @@ syscall_entry:
     pushq %rax
     movq %rsp, %rdi
     call syscall_dispatch
-    addq $56, %rsp
+    popq %rax
+    popq %r9
+    popq %r8
+    popq %rcx
+    popq %rdx
+    popq %rsi
+    popq %rdi
     iretq
+.size syscall_entry, .-syscall_entry
