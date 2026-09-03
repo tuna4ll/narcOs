@@ -9,7 +9,7 @@ MUSL_SYSROOT := $(abspath $(BUILD)/musl/sysroot)
 MUSL_CC := $(MUSL_SYSROOT)/bin/musl-gcc
 USER_APP := $(BUILD)/userland/app
 USER_MODE_STAMP := $(BUILD)/userland/.mode-$(USERLAND)
-USER_BASE := 0x0000100000000000
+USER_BASE := 0x0000000000400000
 
 CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
           -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2 \

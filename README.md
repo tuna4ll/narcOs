@@ -80,7 +80,7 @@ The graphical `run` target intentionally leaves QEMU open after userspace exits.
 
 ## musl build
 
-The default userland is `musl`:
+The default userland is `musl`. The executable is linked at the conventional low x86_64 userspace base (`0x400000`), while the kernel remains high-half. This is intentional: upstream musl/GCC startup objects use the normal x86_64 small code model and are not linkable as a non-PIE executable at the old 16 TiB demo address.
 
 ```sh
 make userland
@@ -146,7 +146,7 @@ This builds a ring-3 ELF smoke program with no libc and checks:
 - all kernel C/assembly builds under `-Werror`
 - the userspace image is an x86_64 `ET_EXEC`
 - it contains loadable ELF segments
-- the high userspace entry point is correct
+- the low canonical userspace entry point is correct
 - the Limine request section is present in the kernel
 - the fast syscall entry and C dispatcher are linked
 

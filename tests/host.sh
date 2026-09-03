@@ -19,8 +19,8 @@ nm build/kernel.elf | grep -q ' syscall_dispatch_fast$'
 
 entry=$(readelf -h build/userland/app | awk '/Entry point address:/ {print $4}')
 case "$entry" in
-    0x1000*) ;;
-    *) echo "error: smoke entry is outside the expected high userspace image: $entry" >&2; exit 1 ;;
+    0x4*) ;;
+    *) echo "error: smoke entry is outside the expected low userspace image: $entry" >&2; exit 1 ;;
 esac
 
 echo '[host-test] PASS: scripts, userspace ELF, kernel link, SYSCALL entry'
