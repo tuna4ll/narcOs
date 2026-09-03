@@ -1,8 +1,12 @@
 CC      ?= cc
 LD      ?= ld
+USERLAND ?= musl
 
 BUILD := build
 DIST  := dist
+MUSL_VERSION ?= 1.2.6
+MUSL_SYSROOT := $(abspath $(BUILD)/musl/sysroot)
+MUSL_CC := $(MUSL_SYSROOT)/bin/musl-gcc
 USER_APP := $(BUILD)/userland/app
 USER_BASE := 0x0000100000000000
 
@@ -10,27 +14,36 @@ CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protect
           -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2 \
           -I kernel/include
 ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel
-USER_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
-               -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=large -mno-sse -mno-sse2 -I userland/include
 USER_LINK_FLAGS := -nostdlib -static -Wl,-no-pie -Wl,-e,_start \
+                   -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none
+MUSL_USER_FLAGS := -std=c11 -O2 -Wall -Wextra -Werror -static -fno-pie -no-pie \
                    -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none
 
 KERNEL_C := $(shell find kernel -name '*.c' | sort)
 KERNEL_S := $(filter-out kernel/user_blob.S,$(shell find kernel -name '*.S' | sort))
 KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S)) $(BUILD)/kernel/user_blob.o
-USER_C   := $(shell find userland -name '*.c' | sort)
-USER_O   := $(patsubst %.c,$(BUILD)/%.o,$(USER_C))
 
-.PHONY: all kernel userland iso run run-serial clean distclean limine
+.PHONY: all kernel userland musl iso run run-serial clean distclean limine
 all: iso
 
-$(BUILD)/userland/%.o: userland/%.c
-	@mkdir -p $(dir $@)
-	$(CC) $(USER_CFLAGS) -c $< -o $@
+ifeq ($(USERLAND),musl)
+$(MUSL_CC): scripts/fetch-musl.sh scripts/build-musl.sh
+	MUSL_VERSION=$(MUSL_VERSION) ./scripts/fetch-musl.sh
+	MUSL_VERSION=$(MUSL_VERSION) CC=$(CC) ./scripts/build-musl.sh
 
-$(USER_APP): $(USER_O)
+musl: $(MUSL_CC)
+
+$(USER_APP): userland/hello.c $(MUSL_CC)
 	@mkdir -p $(dir $@)
-	$(CC) $(USER_LINK_FLAGS) $(USER_O) -o $@
+	$(MUSL_CC) $(MUSL_USER_FLAGS) $< -o $@
+else ifeq ($(USERLAND),smoke)
+$(USER_APP): tests/smoke.c
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
+		-fno-pie -m64 -mno-red-zone -mcmodel=large $(USER_LINK_FLAGS) $< -o $@
+else
+$(error USERLAND must be 'musl' or 'smoke')
+endif
 
 userland: $(USER_APP)
 
@@ -83,4 +96,4 @@ clean:
 	rm -rf $(BUILD) $(DIST)
 
 distclean: clean
-	rm -rf limine
+	rm -rf limine third_party .cache
