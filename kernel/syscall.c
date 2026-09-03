@@ -1,5 +1,6 @@
 #include <kernel/mm.h>
 #include <kernel/syscall.h>
+#include <kernel/serial.h>
 #include <kernel/vga.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -292,9 +293,25 @@ static long dispatch_linux(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
 }
 
 void syscall_dispatch_fast(struct fast_syscall_frame *frame) {
+    static unsigned trace_count;
+    if (trace_count < 64) {
+        serial_puts("[syscall] nr=");
+        serial_puthex(frame->rax);
+        serial_puts(" a1=");
+        serial_puthex(frame->rdi);
+        serial_puts(" a2=");
+        serial_puthex(frame->rsi);
+        serial_puts("\n");
+    }
     long ret = dispatch_linux(frame->rax, frame->rdi, frame->rsi, frame->rdx,
                               frame->r10, frame->r8, frame->r9);
     frame->rax = (uint64_t)ret;
+    if (trace_count < 64) {
+        serial_puts("[syscall] ret=");
+        serial_puthex(frame->rax);
+        serial_puts("\n");
+        trace_count++;
+    }
 }
 
 void syscall_dispatch(struct syscall_frame *frame) {

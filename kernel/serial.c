@@ -25,3 +25,10 @@ void serial_write(const char *s, size_t n) {
 void serial_puts(const char *s) {
     while (*s) serial_putc(*s++);
 }
+
+void serial_puthex(uint64_t value) {
+    static const char hex[] = "0123456789abcdef";
+    serial_puts("0x");
+    for (int shift = 60; shift >= 0; shift -= 4)
+        serial_putc(hex[(value >> shift) & 0xf]);
+}

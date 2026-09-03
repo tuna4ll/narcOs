@@ -64,7 +64,12 @@ __attribute__((noreturn)) void _start(void) {
                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mapped < 0) goto fail;
     if (sc2(SYS_SET_TID_ADDRESS, mapped, 0) < 0) goto fail;
+    *(uintptr_t *)mapped = (uintptr_t)mapped;
     if (sc2(SYS_ARCH_PRCTL, ARCH_SET_FS, mapped) < 0) goto fail;
+    uintptr_t tp;
+    __asm__ volatile ("mov %%fs:0, %0" : "=r"(tp));
+    if (tp != (uintptr_t)mapped) goto fail;
+    say("[smoke] FS/TLS access OK\n");
 
     sc1(SYS_EXIT_GROUP, 0);
     for (;;) __asm__ volatile ("hlt");
