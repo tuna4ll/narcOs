@@ -1,10 +1,10 @@
 #include <kernel/mm.h>
 #include <kernel/string.h>
 
-#define PAGE_SIZE 4096ULL
 #define PTE_PRESENT (1ULL << 0)
 #define PTE_WRITE   (1ULL << 1)
 #define PTE_USER    (1ULL << 2)
+#define PTE_HUGE    (1ULL << 7)
 #define ADDR_MASK   0x000ffffffffff000ULL
 
 static struct limine_memmap_response *memmap;
@@ -56,9 +56,10 @@ static uint64_t read_cr3(void) {
     return value & ADDR_MASK;
 }
 
-static uint64_t *next_table(uint64_t *table, size_t index, int user) {
+static uint64_t *next_table(uint64_t *table, size_t index, int create, int user) {
     uint64_t entry = table[index];
     if (!(entry & PTE_PRESENT)) {
+        if (!create) return 0;
         uint64_t phys = pmm_alloc_page();
         if (!phys) return 0;
         uint64_t bits = PTE_PRESENT | PTE_WRITE;
@@ -67,28 +68,35 @@ static uint64_t *next_table(uint64_t *table, size_t index, int user) {
         return phys_to_virt(phys);
     }
 
-    if (user) table[index] |= PTE_USER;
+    if (entry & PTE_HUGE) return 0;
+    if (user && create) table[index] |= PTE_USER;
     return phys_to_virt(entry & ADDR_MASK);
 }
 
-static void vmm_map(uint64_t virt, uint64_t phys, uint64_t flags, int user) {
+static uint64_t *get_pte(uint64_t virt, int create, int user) {
     uint64_t *pml4 = phys_to_virt(read_cr3());
     size_t i4 = (virt >> 39) & 0x1ff;
     size_t i3 = (virt >> 30) & 0x1ff;
     size_t i2 = (virt >> 21) & 0x1ff;
     size_t i1 = (virt >> 12) & 0x1ff;
 
-    uint64_t *pdpt = next_table(pml4, i4, user);
-    if (!pdpt) return;
-    uint64_t *pd = next_table(pdpt, i3, user);
-    if (!pd) return;
-    uint64_t *pt = next_table(pd, i2, user);
-    if (!pt) return;
+    uint64_t *pdpt = next_table(pml4, i4, create, user);
+    if (!pdpt) return 0;
+    uint64_t *pd = next_table(pdpt, i3, create, user);
+    if (!pd) return 0;
+    uint64_t *pt = next_table(pd, i2, create, user);
+    if (!pt) return 0;
+    return &pt[i1];
+}
+
+static void vmm_map(uint64_t virt, uint64_t phys, uint64_t flags, int user) {
+    uint64_t *pte = get_pte(virt, 1, user);
+    if (!pte) return;
 
     uint64_t bits = PTE_PRESENT;
     if (user) bits |= PTE_USER;
     if (flags & VMM_WRITE) bits |= PTE_WRITE;
-    pt[i1] = (phys & ADDR_MASK) | bits;
+    *pte = (phys & ADDR_MASK) | bits;
     __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
 }
 
@@ -98,4 +106,45 @@ void vmm_map_user(uint64_t virt, uint64_t phys, uint64_t flags) {
 
 void vmm_map_kernel(uint64_t virt, uint64_t phys, uint64_t flags) {
     vmm_map(virt, phys, flags, 0);
+}
+
+int vmm_protect_user(uint64_t virt, uint64_t flags) {
+    uint64_t *pte = get_pte(virt, 0, 0);
+    if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return -1;
+    if (flags & VMM_WRITE) *pte |= PTE_WRITE;
+    else *pte &= ~PTE_WRITE;
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+    return 0;
+}
+
+int vmm_unmap_user(uint64_t virt) {
+    uint64_t *pte = get_pte(virt, 0, 0);
+    if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return -1;
+    *pte = 0;
+    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+    return 0;
+}
+
+uint64_t vmm_user_phys(uint64_t virt) {
+    uint64_t *pte = get_pte(virt, 0, 0);
+    if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return 0;
+    return (*pte & ADDR_MASK) | (virt & (PAGE_SIZE - 1));
+}
+
+int vmm_user_range_ok(uint64_t virt, uint64_t len, int write) {
+    if (!len) return 1;
+    if (virt > 0x00007fffffffffffULL) return 0;
+    if (len - 1 > 0x00007fffffffffffULL - virt) return 0;
+
+    uint64_t end = virt + len - 1;
+    uint64_t page = virt & ~(PAGE_SIZE - 1);
+    uint64_t last = end & ~(PAGE_SIZE - 1);
+    for (;;) {
+        uint64_t *pte = get_pte(page, 0, 0);
+        if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return 0;
+        if (write && !(*pte & PTE_WRITE)) return 0;
+        if (page == last) break;
+        page += PAGE_SIZE;
+    }
+    return 1;
 }

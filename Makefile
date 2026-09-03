@@ -1,9 +1,10 @@
 CC      ?= cc
 LD      ?= ld
-OBJCOPY ?= objcopy
 
 BUILD := build
 DIST  := dist
+USER_APP := $(BUILD)/userland/app
+USER_BASE := 0x0000100000000000
 
 CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
           -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2 \
@@ -11,6 +12,8 @@ CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protect
 ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel
 USER_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
                -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=large -mno-sse -mno-sse2 -I userland/include
+USER_LINK_FLAGS := -nostdlib -static -Wl,-no-pie -Wl,-e,_start \
+                   -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none
 
 KERNEL_C := $(shell find kernel -name '*.c' | sort)
 KERNEL_S := $(filter-out kernel/user_blob.S,$(shell find kernel -name '*.S' | sort))
@@ -25,13 +28,11 @@ $(BUILD)/userland/%.o: userland/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(BUILD)/userland.elf: $(USER_O) userland/linker.ld
-	$(LD) -nostdlib -static -z max-page-size=0x1000 -T userland/linker.ld $(USER_O) -o $@
+$(USER_APP): $(USER_O)
+	@mkdir -p $(dir $@)
+	$(CC) $(USER_LINK_FLAGS) $(USER_O) -o $@
 
-$(BUILD)/userland.bin: $(BUILD)/userland.elf
-	$(OBJCOPY) -O binary $< $@
-
-userland: $(BUILD)/userland.bin
+userland: $(USER_APP)
 
 $(BUILD)/kernel/%.o: kernel/%.c
 	@mkdir -p $(dir $@)
@@ -41,7 +42,7 @@ $(BUILD)/kernel/%.o: kernel/%.S
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -c $< -o $@
 
-$(BUILD)/kernel/user_blob.o: kernel/user_blob.S $(BUILD)/userland.bin
+$(BUILD)/kernel/user_blob.o: kernel/user_blob.S $(USER_APP)
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -c $< -o $@
 

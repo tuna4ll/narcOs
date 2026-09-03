@@ -142,3 +142,11 @@ void vga_write(const char *s, size_t n) {
 void vga_puts(const char *s) {
     while (*s) vga_putc(*s++);
 }
+
+uint16_t vga_cols(void) {
+    return (uint16_t)text_cols;
+}
+
+uint16_t vga_rows(void) {
+    return (uint16_t)text_rows;
+}

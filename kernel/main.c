@@ -3,6 +3,7 @@
 #include <kernel/limine.h>
 #include <kernel/mm.h>
 #include <kernel/serial.h>
+#include <kernel/syscall.h>
 #include <kernel/user.h>
 #include <kernel/vga.h>
 #include <stdint.h>
@@ -58,6 +59,7 @@ void _start(void) {
 
     gdt_init((uint64_t)(uintptr_t)(kernel_stack + sizeof(kernel_stack)));
     idt_init();
+    syscall_init((uint64_t)(uintptr_t)(kernel_stack + sizeof(kernel_stack)));
     vga_puts("[kernel] ring 0 initialized\n");
 
     user_start();
