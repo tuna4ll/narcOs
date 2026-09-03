@@ -8,6 +8,7 @@ MUSL_VERSION ?= 1.2.6
 MUSL_SYSROOT := $(abspath $(BUILD)/musl/sysroot)
 MUSL_CC := $(MUSL_SYSROOT)/bin/musl-gcc
 USER_APP := $(BUILD)/userland/app
+USER_MODE_STAMP := $(BUILD)/userland/.mode-$(USERLAND)
 USER_BASE := 0x0000100000000000
 
 CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
@@ -26,6 +27,11 @@ KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) $(patsubst %.S,$(BUILD)/%.o
 .PHONY: all kernel userland musl iso run run-serial clean distclean limine test test-host test-qemu test-qemu-smoke
 all: iso
 
+$(USER_MODE_STAMP):
+	@mkdir -p $(dir $@)
+	rm -f $(USER_APP) $(BUILD)/userland/.mode-*
+	@touch $@
+
 ifeq ($(USERLAND),musl)
 $(MUSL_CC): scripts/fetch-musl.sh scripts/build-musl.sh
 	MUSL_VERSION=$(MUSL_VERSION) ./scripts/fetch-musl.sh
@@ -33,11 +39,11 @@ $(MUSL_CC): scripts/fetch-musl.sh scripts/build-musl.sh
 
 musl: $(MUSL_CC)
 
-$(USER_APP): userland/hello.c $(MUSL_CC)
+$(USER_APP): userland/hello.c $(MUSL_CC) $(USER_MODE_STAMP)
 	@mkdir -p $(dir $@)
 	$(MUSL_CC) $(MUSL_USER_FLAGS) $< -o $@
 else ifeq ($(USERLAND),smoke)
-$(USER_APP): tests/smoke.c
+$(USER_APP): tests/smoke.c $(USER_MODE_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
 		-fno-pie -m64 -mno-red-zone -mcmodel=large $(USER_LINK_FLAGS) $< -o $@
