@@ -14,7 +14,7 @@ rm -rf "$OBJ" "$SYSROOT"
 mkdir -p "$OBJ" "$SYSROOT"
 cd "$OBJ"
 
-CC=${CC:-cc} "$SRC/configure" \
+CC=${CC:-cc} CFLAGS="${MUSL_CFLAGS:--O2 -march=x86-64 -mtune=generic}" "$SRC/configure" \
     --prefix="$SYSROOT" \
     --syslibdir="$SYSROOT/lib" \
     --disable-shared \

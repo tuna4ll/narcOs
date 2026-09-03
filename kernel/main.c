@@ -1,3 +1,4 @@
+#include <kernel/cpu.h>
 #include <kernel/gdt.h>
 #include <kernel/idt.h>
 #include <kernel/limine.h>
@@ -57,6 +58,7 @@ void _start(void) {
     }
     vga_puts("[boot] Limine framebuffer ready\n");
 
+    cpu_init();
     gdt_init((uint64_t)(uintptr_t)(kernel_stack + sizeof(kernel_stack)));
     idt_init();
     syscall_init((uint64_t)(uintptr_t)(kernel_stack + sizeof(kernel_stack)));

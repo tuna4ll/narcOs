@@ -33,6 +33,8 @@ if [ "$MODE" = musl ]; then
 else
     grep -Fq '[smoke] syscall + ELF loader OK' "$LOG"
     grep -Fq '[smoke] mmap + writev + ioctl OK' "$LOG"
+    grep -Fq '[smoke] FS/TLS access OK' "$LOG"
+    grep -Fq '[smoke] SSE2 access OK' "$LOG"
 fi
 
 grep -Fq '[kernel] userspace exited' "$LOG"

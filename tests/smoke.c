@@ -71,6 +71,10 @@ __attribute__((noreturn)) void _start(void) {
     if (tp != (uintptr_t)mapped) goto fail;
     say("[smoke] FS/TLS access OK\n");
 
+    /* Verify that ring 3 can execute baseline x86-64 SSE2 instructions. */
+    __asm__ volatile ("pxor %%xmm0, %%xmm0" ::: "xmm0");
+    say("[smoke] SSE2 access OK\n");
+
     sc1(SYS_EXIT_GROUP, 0);
     for (;;) __asm__ volatile ("hlt");
 fail:

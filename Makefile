@@ -18,6 +18,7 @@ ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel
 USER_LINK_FLAGS := -nostdlib -static -Wl,-no-pie -Wl,-e,_start \
                    -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none
 MUSL_USER_FLAGS := -std=c11 -O2 -Wall -Wextra -Werror -static -fno-pie -no-pie \
+                   -march=x86-64 -mtune=generic \
                    -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none
 
 KERNEL_C := $(shell find kernel -name '*.c' | sort)

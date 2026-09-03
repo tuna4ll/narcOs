@@ -143,6 +143,12 @@ make test-host
 
 This builds a ring-3 ELF smoke program with no libc and checks:
 
+- Linux-style fast syscalls and ELF entry
+- mmap/writev/ioctl memory + I/O path
+- FS-base TLS via `arch_prctl(ARCH_SET_FS)`
+- baseline x86-64 SSE2 execution from CPL3
+
+
 - all kernel C/assembly builds under `-Werror`
 - the userspace image is an x86_64 `ET_EXEC`
 - it contains loadable ELF segments
