@@ -1,25 +1,13 @@
-BSD 2-Clause License
+Türk OSDev Topluluğu Serbest Lisansı
 
-Copyright (c) 2026, TurkOsdev contributors
-All rights reserved.
+Copyright © 2026 Türk OSDev Topluluğu
 
-Redistribution and use in source and binary forms, with or without
-modification, are permitted provided that the following conditions are met:
+Bu yazılımı istediğin gibi kullanabilirsin.
 
-1. Redistributions of source code must retain the above copyright notice, this
-   list of conditions and the following disclaimer.
+Kopyala, değiştir, dağıt, forkla, sat, başka projeye göm, kapalı kaynak yap, açık kaynak yap; kısacası al ne yapıyorsan yap.
 
-2. Redistributions in binary form must reproduce the above copyright notice,
-   this list of conditions and the following disclaimer in the documentation
-   and/or other materials provided with the distribution.
+Tek şartımız şu: Bu yazılımı kullandığın için oluşabilecek herhangi bir zarar, veri kaybı, sistem çökmesi, yangın, patlama, sinir krizi veya benzeri bir durumdan yazılımın geliştiricileri ve Türk OSDev Topluluğu sorumlu değildir.
 
-THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
-AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
-DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
-FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
-CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
-OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
-OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+Yazılım herhangi bir garanti verilmeden, olduğu gibi sunulmaktadır.
+
+Kaynak belirtmek zorunlu değildir ama belirtirsen seviniriz.
