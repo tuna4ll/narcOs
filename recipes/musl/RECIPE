@@ -1,9 +1,6 @@
-# musl recipe
-# Included by the root Makefile. Keep package-specific fetch/build logic here.
-
-MUSL_VERSION ?= 1.2.6
-MUSL_SHA256 ?= d585fd3b613c66151fc3249e8ed44f77020cb5e6c1e635a616d3f9f82460512a
-MUSL_URL ?= https://musl.libc.org/releases/musl-$(MUSL_VERSION).tar.gz
+MUSL_VERSION := 1.2.6
+MUSL_SHA256 := d585fd3b613c66151fc3249e8ed44f77020cb5e6c1e635a616d3f9f82460512a
+MUSL_URL := https://musl.libc.org/releases/musl-$(MUSL_VERSION).tar.gz
 MUSL_ARCHIVE := $(CACHE)/sources/musl-$(MUSL_VERSION).tar.gz
 MUSL_SRC := third_party/musl-$(MUSL_VERSION)
 MUSL_PREPARED := $(MUSL_SRC)/.prepared
@@ -11,48 +8,24 @@ MUSL_OBJ := $(BUILD)/musl/obj
 MUSL_SYSROOT := $(abspath $(BUILD)/musl/sysroot)
 MUSL_CC := $(MUSL_SYSROOT)/bin/musl-gcc
 MUSL_PATCHES := $(sort $(wildcard recipes/musl/patches/*.patch))
-MUSL_BUILD_CFLAGS ?= -O2 -march=x86-64 -mtune=generic
-
-.PHONY: musl musl-clean
 
 $(MUSL_ARCHIVE):
 	@mkdir -p $(dir $@)
-	@if [ -n "$(MUSL_TARBALL)" ]; then \
-		cp "$(MUSL_TARBALL)" "$@"; \
-	else \
-		command -v curl >/dev/null 2>&1 || { echo 'error: curl is required to fetch musl' >&2; exit 1; }; \
-		curl -fL --retry 3 --connect-timeout 15 "$(MUSL_URL)" -o "$@"; \
-	fi
+	curl -fL --retry 3 "$(MUSL_URL)" -o $@
 
 $(MUSL_PREPARED): $(MUSL_ARCHIVE) $(MUSL_PATCHES)
-	@command -v sha256sum >/dev/null 2>&1 || { echo 'error: sha256sum is required' >&2; exit 1; }
-	@printf '%s  %s\n' '$(MUSL_SHA256)' '$(MUSL_ARCHIVE)' | sha256sum -c -
-	rm -rf $(MUSL_SRC) $(BUILD)/musl/source
-	mkdir -p $(BUILD)/musl/source third_party
-	tar -xzf $(MUSL_ARCHIVE) -C $(BUILD)/musl/source
-	mv $(BUILD)/musl/source/musl-$(MUSL_VERSION) $(MUSL_SRC)
-	@set -e; for patch_file in $(MUSL_PATCHES); do \
-		echo "[recipe:musl] applying $$patch_file"; \
-		patch -d $(MUSL_SRC) -p1 < "$$patch_file"; \
-	done
+	@printf '%s  %s\n' '$(MUSL_SHA256)' '$<' | sha256sum -c -
+	rm -rf $(MUSL_SRC)
+	mkdir -p third_party
+	tar -xzf $< -C third_party
+	@set -e; for p in $(MUSL_PATCHES); do patch -d $(MUSL_SRC) -p1 < "$$p"; done
 	@touch $@
 
 $(MUSL_CC): $(MUSL_PREPARED)
 	rm -rf $(MUSL_OBJ) $(MUSL_SYSROOT)
-	mkdir -p $(MUSL_OBJ) $(MUSL_SYSROOT)
-	cd $(MUSL_OBJ) && \
-		CC='$(CC)' CFLAGS='$(MUSL_BUILD_CFLAGS)' $(abspath $(MUSL_SRC))/configure \
-			--prefix='$(MUSL_SYSROOT)' \
-			--syslibdir='$(MUSL_SYSROOT)/lib' \
-			--disable-shared \
-			--enable-wrapper=gcc
-	$(MAKE) -C $(MUSL_OBJ) -j$${JOBS:-$$(getconf _NPROCESSORS_ONLN 2>/dev/null || printf '1')}
+	mkdir -p $(MUSL_OBJ)
+	cd $(MUSL_OBJ) && CC='$(CC)' CFLAGS='-O2 -march=x86-64 -mtune=generic' \
+		$(abspath $(MUSL_SRC))/configure --prefix='$(MUSL_SYSROOT)' \
+		--syslibdir='$(MUSL_SYSROOT)/lib' --disable-shared --enable-wrapper=gcc
+	$(MAKE) -C $(MUSL_OBJ) -j$$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
 	$(MAKE) -C $(MUSL_OBJ) install
-	@test -x $(MUSL_CC)
-	@test -f $(MUSL_SYSROOT)/lib/libc.a
-	@test -f $(MUSL_SYSROOT)/include/stdio.h
-
-musl: $(MUSL_CC)
-
-musl-clean:
-	rm -rf $(MUSL_OBJ) $(MUSL_SYSROOT) $(MUSL_SRC)

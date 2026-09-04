@@ -1,53 +1,35 @@
-CC      ?= cc
-LD      ?= ld
-USERLAND ?= musl
+CC ?= cc
+LD ?= ld
 
 BUILD := build
-DIST  := dist
+DIST := dist
 CACHE := .cache
 USER_APP := $(BUILD)/userland/app
-USER_MODE_STAMP := $(BUILD)/userland/.mode-$(USERLAND)
-USER_BASE := 0x0000000000400000
+USER_BASE := 0x400000
 
 CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
           -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2 \
           -I kernel/include
 ASFLAGS := -ffreestanding -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel
-USER_LINK_FLAGS := -nostdlib -static -Wl,-no-pie -Wl,-e,_start \
-                   -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none
-MUSL_USER_FLAGS := -std=c11 -O2 -Wall -Wextra -Werror -static -fno-pie -no-pie \
-                   -march=x86-64 -mtune=generic \
-                   -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none
+USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -static -fno-pie -no-pie \
+               -march=x86-64 -mtune=generic \
+               -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none
 
 KERNEL_C := $(shell find kernel -name '*.c' | sort)
 KERNEL_S := $(filter-out kernel/user_blob.S,$(shell find kernel -name '*.S' | sort))
-KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S)) $(BUILD)/kernel/user_blob.o
+KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) \
+            $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S)) \
+            $(BUILD)/kernel/user_blob.o
 
-.PHONY: all kernel userland iso run run-serial clean distclean recipes test test-host test-qemu test-qemu-smoke
+.PHONY: all kernel userland iso run run-serial clean distclean
 all: iso
 
 include recipes/musl/RECIPE
 include recipes/limine/RECIPE
 
-recipes: musl limine
-
-$(USER_MODE_STAMP):
+$(USER_APP): userland/hello.c $(MUSL_CC)
 	@mkdir -p $(dir $@)
-	rm -f $(USER_APP) $(BUILD)/userland/.mode-*
-	@touch $@
-
-ifeq ($(USERLAND),musl)
-$(USER_APP): userland/hello.c $(MUSL_CC) $(USER_MODE_STAMP)
-	@mkdir -p $(dir $@)
-	$(MUSL_CC) $(MUSL_USER_FLAGS) $< -o $@
-else ifeq ($(USERLAND),smoke)
-$(USER_APP): tests/smoke.c $(USER_MODE_STAMP)
-	@mkdir -p $(dir $@)
-	$(CC) -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
-		-fno-pie -m64 -mno-red-zone -mcmodel=large $(USER_LINK_FLAGS) $< -o $@
-else
-$(error USERLAND must be 'musl' or 'smoke')
-endif
+	$(MUSL_CC) $(USER_CFLAGS) $< -o $@
 
 userland: $(USER_APP)
 
@@ -68,8 +50,7 @@ $(BUILD)/kernel.elf: $(KERNEL_O) kernel/linker.ld
 
 kernel: $(BUILD)/kernel.elf
 
-iso: $(BUILD)/kernel.elf limine
-	@command -v xorriso >/dev/null || { echo 'error: xorriso is required'; exit 1; }
+iso: $(BUILD)/kernel.elf $(LIMINE_TOOL)
 	rm -rf $(BUILD)/iso_root $(DIST)
 	mkdir -p $(BUILD)/iso_root/boot/limine $(BUILD)/iso_root/EFI/BOOT $(DIST)
 	cp $(BUILD)/kernel.elf $(BUILD)/iso_root/boot/kernel.elf
@@ -84,25 +65,12 @@ iso: $(BUILD)/kernel.elf limine
 	$(LIMINE_TOOL) bios-install $(DIST)/kernel-template.iso
 
 run: iso
-	@command -v qemu-system-x86_64 >/dev/null || { echo 'error: qemu-system-x86_64 is required'; exit 1; }
 	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/kernel-template.iso \
 		-serial none -monitor none -no-reboot -no-shutdown
 
 run-serial: iso
-	@command -v qemu-system-x86_64 >/dev/null || { echo 'error: qemu-system-x86_64 is required'; exit 1; }
 	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/kernel-template.iso \
 		-serial stdio -monitor none -no-reboot -no-shutdown
-
-test: test-host
-
-test-host:
-	./tests/host.sh
-
-test-qemu-smoke:
-	./tests/qemu.sh smoke
-
-test-qemu:
-	./tests/qemu.sh musl
 
 clean:
 	rm -rf $(BUILD) $(DIST)

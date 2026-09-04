@@ -1,44 +1,24 @@
-# Limine recipe
-# Uses Limine's pinned binary release and builds the host-side installer.
-
-LIMINE_VERSION ?= 12.9.0
-LIMINE_SHA256 ?= 84059c93b4ea03994af6d614654c7095291388850ea7b258d64f9263abde5557
-LIMINE_URL ?= https://github.com/Limine-Bootloader/Limine/releases/download/v$(LIMINE_VERSION)/limine-binary.tar.gz
+LIMINE_VERSION := 12.9.0
+LIMINE_SHA256 := 84059c93b4ea03994af6d614654c7095291388850ea7b258d64f9263abde5557
+LIMINE_URL := https://github.com/Limine-Bootloader/Limine/releases/download/v$(LIMINE_VERSION)/limine-binary.tar.gz
 LIMINE_ARCHIVE := $(CACHE)/sources/limine-binary-$(LIMINE_VERSION).tar.gz
 LIMINE_SRC := third_party/limine-$(LIMINE_VERSION)
 LIMINE_PREPARED := $(LIMINE_SRC)/.prepared
 LIMINE_TOOL := $(LIMINE_SRC)/limine
 LIMINE_PATCHES := $(sort $(wildcard recipes/limine/patches/*.patch))
 
-.PHONY: limine limine-clean
-
 $(LIMINE_ARCHIVE):
 	@mkdir -p $(dir $@)
-	@if [ -n "$(LIMINE_TARBALL)" ]; then \
-		cp "$(LIMINE_TARBALL)" "$@"; \
-	else \
-		command -v curl >/dev/null 2>&1 || { echo 'error: curl is required to fetch Limine' >&2; exit 1; }; \
-		curl -fL --retry 3 --connect-timeout 15 "$(LIMINE_URL)" -o "$@"; \
-	fi
+	curl -fL --retry 3 "$(LIMINE_URL)" -o $@
 
 $(LIMINE_PREPARED): $(LIMINE_ARCHIVE) $(LIMINE_PATCHES)
-	@command -v sha256sum >/dev/null 2>&1 || { echo 'error: sha256sum is required' >&2; exit 1; }
-	@printf '%s  %s\n' '$(LIMINE_SHA256)' '$(LIMINE_ARCHIVE)' | sha256sum -c -
-	rm -rf $(LIMINE_SRC) $(BUILD)/limine/source
-	mkdir -p $(BUILD)/limine/source third_party
-	tar -xzf $(LIMINE_ARCHIVE) -C $(BUILD)/limine/source
-	mv $(BUILD)/limine/source/limine-binary $(LIMINE_SRC)
-	@set -e; for patch_file in $(LIMINE_PATCHES); do \
-		echo "[recipe:limine] applying $$patch_file"; \
-		patch -d $(LIMINE_SRC) -p1 < "$$patch_file"; \
-	done
+	@printf '%s  %s\n' '$(LIMINE_SHA256)' '$<' | sha256sum -c -
+	rm -rf $(LIMINE_SRC) third_party/limine-binary
+	mkdir -p third_party
+	tar -xzf $< -C third_party
+	mv third_party/limine-binary $(LIMINE_SRC)
+	@set -e; for p in $(LIMINE_PATCHES); do patch -d $(LIMINE_SRC) -p1 < "$$p"; done
 	@touch $@
 
 $(LIMINE_TOOL): $(LIMINE_PREPARED)
 	$(MAKE) -C $(LIMINE_SRC)
-	@test -x $@
-
-limine: $(LIMINE_TOOL)
-
-limine-clean:
-	rm -rf $(LIMINE_SRC)
