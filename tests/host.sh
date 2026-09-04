@@ -3,9 +3,19 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$ROOT"
 
-for script in scripts/*.sh tests/*.sh; do
-    sh -n "$script"
+for test_script in tests/*.sh; do
+    sh -n "$test_script"
 done
+
+test -f recipes/musl/RECIPE
+test -d recipes/musl/patches
+test -f recipes/limine/RECIPE
+test -d recipes/limine/patches
+test ! -d scripts
+
+# Parse the Make database without downloading or building dependencies.
+make -qp 2>/dev/null | grep -q '^musl:'
+make -qp 2>/dev/null | grep -q '^limine:'
 
 make clean >/dev/null
 make USERLAND=smoke kernel
@@ -23,4 +33,4 @@ case "$entry" in
     *) echo "error: smoke entry is outside the expected low userspace image: $entry" >&2; exit 1 ;;
 esac
 
-echo '[host-test] PASS: scripts, userspace ELF, kernel link, SYSCALL entry'
+echo '[host-test] PASS: recipes, userspace ELF, kernel link, SYSCALL entry'

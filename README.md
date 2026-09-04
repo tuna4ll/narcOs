@@ -36,10 +36,13 @@ tests/
   smoke.c            no-libc ring3 syscall exerciser
   host.sh             compile/link/ELF checks
   qemu.sh             serial boot assertions
-scripts/
-  fetch-limine.sh
-  fetch-musl.sh
-  build-musl.sh
+recipes/
+  musl/
+    RECIPE           fetch, verify, patch, configure, build, install
+    patches/         optional musl patches, applied in filename order
+  limine/
+    RECIPE           fetch, verify, patch, build host installer
+    patches/         optional Limine patches, applied in filename order
 ```
 
 ## Dependencies
@@ -50,7 +53,7 @@ On a typical Debian/Ubuntu host:
 sudo apt install build-essential curl xorriso qemu-system-x86
 ```
 
-`make` downloads a pinned musl 1.2.6 release tarball and verifies its SHA-256 before building it. Limine is fetched separately by the existing Limine helper.
+`make` reads package logic from `recipes/*/RECIPE`. Both musl 1.2.6 and Limine are pinned, downloaded into `.cache/sources`, and SHA-256 verified before use. There is no dependency `scripts/` directory.
 
 ## Build and run
 
@@ -106,6 +109,31 @@ The musl source is kept out of Git. To build fully offline, provide a local rele
 
 ```sh
 MUSL_TARBALL=/path/to/musl-1.2.6.tar.gz make userland
+```
+
+## Recipes and patches
+
+Third-party dependency logic lives beside the dependency metadata instead of in loose shell scripts:
+
+```text
+recipes/
+  musl/
+    RECIPE
+    patches/
+  limine/
+    RECIPE
+    patches/
+```
+
+`RECIPE` files are GNU Make fragments included by the root `Makefile`. Each recipe owns its version, URL, checksum, source preparation and build/install steps. Any `*.patch` file placed in that recipe's `patches/` directory is applied with `patch -p1` in lexical filename order after extraction and before building. No patch is required for the current musl or Limine versions, so those directories are intentionally empty apart from `.gitkeep`.
+
+Useful targets:
+
+```sh
+make musl       # build/install the musl recipe
+make limine     # prepare/build the Limine recipe
+make recipes    # prepare both dependencies
+make distclean  # remove build output, source trees and download cache
 ```
 
 ## Kernel ABI currently implemented

@@ -1,6 +1,5 @@
 build/
 dist/
-limine/
 third_party/
 .cache/
 *.iso

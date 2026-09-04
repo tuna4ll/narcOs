@@ -4,9 +4,7 @@ USERLAND ?= musl
 
 BUILD := build
 DIST  := dist
-MUSL_VERSION ?= 1.2.6
-MUSL_SYSROOT := $(abspath $(BUILD)/musl/sysroot)
-MUSL_CC := $(MUSL_SYSROOT)/bin/musl-gcc
+CACHE := .cache
 USER_APP := $(BUILD)/userland/app
 USER_MODE_STAMP := $(BUILD)/userland/.mode-$(USERLAND)
 USER_BASE := 0x0000000000400000
@@ -25,8 +23,13 @@ KERNEL_C := $(shell find kernel -name '*.c' | sort)
 KERNEL_S := $(filter-out kernel/user_blob.S,$(shell find kernel -name '*.S' | sort))
 KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S)) $(BUILD)/kernel/user_blob.o
 
-.PHONY: all kernel userland musl iso run run-serial clean distclean limine test test-host test-qemu test-qemu-smoke
+.PHONY: all kernel userland iso run run-serial clean distclean recipes test test-host test-qemu test-qemu-smoke
 all: iso
+
+include recipes/musl/RECIPE
+include recipes/limine/RECIPE
+
+recipes: musl limine
 
 $(USER_MODE_STAMP):
 	@mkdir -p $(dir $@)
@@ -34,12 +37,6 @@ $(USER_MODE_STAMP):
 	@touch $@
 
 ifeq ($(USERLAND),musl)
-$(MUSL_CC): scripts/fetch-musl.sh scripts/build-musl.sh
-	MUSL_VERSION=$(MUSL_VERSION) ./scripts/fetch-musl.sh
-	MUSL_VERSION=$(MUSL_VERSION) CC=$(CC) ./scripts/build-musl.sh
-
-musl: $(MUSL_CC)
-
 $(USER_APP): userland/hello.c $(MUSL_CC) $(USER_MODE_STAMP)
 	@mkdir -p $(dir $@)
 	$(MUSL_CC) $(MUSL_USER_FLAGS) $< -o $@
@@ -71,23 +68,20 @@ $(BUILD)/kernel.elf: $(KERNEL_O) kernel/linker.ld
 
 kernel: $(BUILD)/kernel.elf
 
-limine:
-	./scripts/fetch-limine.sh
-
 iso: $(BUILD)/kernel.elf limine
 	@command -v xorriso >/dev/null || { echo 'error: xorriso is required'; exit 1; }
 	rm -rf $(BUILD)/iso_root $(DIST)
 	mkdir -p $(BUILD)/iso_root/boot/limine $(BUILD)/iso_root/EFI/BOOT $(DIST)
 	cp $(BUILD)/kernel.elf $(BUILD)/iso_root/boot/kernel.elf
 	cp limine.conf $(BUILD)/iso_root/boot/limine/limine.conf
-	cp limine/limine-bios.sys limine/limine-bios-cd.bin limine/limine-uefi-cd.bin $(BUILD)/iso_root/boot/limine/
-	cp limine/BOOTX64.EFI $(BUILD)/iso_root/EFI/BOOT/
+	cp $(LIMINE_SRC)/limine-bios.sys $(LIMINE_SRC)/limine-bios-cd.bin $(LIMINE_SRC)/limine-uefi-cd.bin $(BUILD)/iso_root/boot/limine/
+	cp $(LIMINE_SRC)/BOOTX64.EFI $(BUILD)/iso_root/EFI/BOOT/
 	xorriso -as mkisofs -R -r -J \
 		-b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table \
 		-hfsplus -apm-block-size 2048 --efi-boot boot/limine/limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		$(BUILD)/iso_root -o $(DIST)/kernel-template.iso
-	./limine/limine bios-install $(DIST)/kernel-template.iso
+	$(LIMINE_TOOL) bios-install $(DIST)/kernel-template.iso
 
 run: iso
 	@command -v qemu-system-x86_64 >/dev/null || { echo 'error: qemu-system-x86_64 is required'; exit 1; }
@@ -114,4 +108,4 @@ clean:
 	rm -rf $(BUILD) $(DIST)
 
 distclean: clean
-	rm -rf limine third_party .cache
+	rm -rf third_party $(CACHE)
