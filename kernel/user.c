@@ -1,6 +1,6 @@
 #include <kernel/mm.h>
 #include <kernel/string.h>
-#include <kernel/vga.h>
+#include <kernel/console.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -22,11 +22,6 @@
 #define AT_PHNUM  5
 #define AT_PAGESZ 6
 #define AT_ENTRY  9
-#define AT_UID   11
-#define AT_EUID  12
-#define AT_GID   13
-#define AT_EGID  14
-#define AT_SECURE 23
 #define AT_RANDOM 25
 #define AT_EXECFN 31
 
@@ -71,9 +66,9 @@ static uint64_t align_up(uint64_t x) {
 }
 
 static __attribute__((noreturn)) void user_panic(const char *msg) {
-    vga_puts("[panic] user loader: ");
-    vga_puts(msg);
-    vga_puts("\n");
+    console_puts("[panic] user loader: ");
+    console_puts(msg);
+    console_puts("\n");
     for (;;) __asm__ volatile ("cli; hlt");
 }
 
@@ -138,7 +133,6 @@ static uint64_t find_phdr_addr(const struct elf64_ehdr *eh, const struct elf64_p
 
 static uint64_t build_linux_stack(const struct elf64_ehdr *eh, uint64_t phdr_addr) {
     static const char arg0[] = "hello";
-    static const char env0[] = "TERM=kernel-template";
     static const uint8_t random_bytes[16] = {
         0x54, 0x75, 0x72, 0x6b, 0x4f, 0x53, 0x64, 0x65,
         0x76, 0x2d, 0x6d, 0x75, 0x73, 0x6c, 0x21, 0x7f,
@@ -151,7 +145,6 @@ static uint64_t build_linux_stack(const struct elf64_ehdr *eh, uint64_t phdr_add
     }
 
     uint64_t sp = USER_STACK_TOP;
-    uint64_t envp = stack_put(&sp, env0, sizeof(env0));
     uint64_t execfn = stack_put(&sp, arg0, sizeof(arg0));
     uint64_t randomp = stack_put(&sp, random_bytes, sizeof(random_bytes));
     sp &= ~0xfULL;
@@ -160,18 +153,12 @@ static uint64_t build_linux_stack(const struct elf64_ehdr *eh, uint64_t phdr_add
         1,
         execfn,
         0,
-        envp,
         0,
         AT_PHDR, phdr_addr,
         AT_PHENT, eh->phentsize,
         AT_PHNUM, eh->phnum,
         AT_PAGESZ, PAGE_SIZE,
         AT_ENTRY, eh->entry,
-        AT_UID, 0,
-        AT_EUID, 0,
-        AT_GID, 0,
-        AT_EGID, 0,
-        AT_SECURE, 0,
         AT_RANDOM, randomp,
         AT_EXECFN, execfn,
         AT_NULL, 0,
@@ -226,6 +213,6 @@ void user_start(void) {
     if (!phdr_addr) user_panic("cannot locate runtime program headers");
     uint64_t stack = build_linux_stack(eh, phdr_addr);
 
-    vga_puts("[user] entering ring 3\n");
+    console_puts("[user] entering ring 3\n");
     enter_userspace(eh->entry, stack);
 }

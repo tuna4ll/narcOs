@@ -104,9 +104,6 @@ void vmm_map_user(uint64_t virt, uint64_t phys, uint64_t flags) {
     vmm_map(virt, phys, flags, 1);
 }
 
-void vmm_map_kernel(uint64_t virt, uint64_t phys, uint64_t flags) {
-    vmm_map(virt, phys, flags, 0);
-}
 
 int vmm_protect_user(uint64_t virt, uint64_t flags) {
     uint64_t *pte = get_pte(virt, 0, 0);

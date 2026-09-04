@@ -18,10 +18,6 @@ void serial_putc(char c) {
     outb(COM1, (uint8_t)c);
 }
 
-void serial_write(const char *s, size_t n) {
-    for (size_t i = 0; i < n; i++) serial_putc(s[i]);
-}
-
 void serial_puts(const char *s) {
     while (*s) serial_putc(*s++);
 }

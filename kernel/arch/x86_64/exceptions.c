@@ -1,5 +1,5 @@
 #include <kernel/serial.h>
-#include <kernel/vga.h>
+#include <kernel/console.h>
 #include <stdint.h>
 
 static uint64_t read_cr2(void) {
@@ -24,6 +24,6 @@ void exception_die(uint64_t vector, uint64_t error, uint64_t rip, uint64_t cs) {
     }
     serial_puts("\n");
 
-    vga_puts("[fault] userspace exception; see serial\n");
+    console_puts("[fault] userspace exception; see serial\n");
     for (;;) __asm__ volatile ("cli; hlt");
 }

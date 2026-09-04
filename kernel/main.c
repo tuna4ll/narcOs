@@ -6,7 +6,7 @@
 #include <kernel/serial.h>
 #include <kernel/syscall.h>
 #include <kernel/user.h>
-#include <kernel/vga.h>
+#include <kernel/console.h>
 #include <stdint.h>
 
 __attribute__((used, section(".limine_requests_start")))
@@ -43,7 +43,6 @@ static uint8_t kernel_stack[16384] __attribute__((aligned(16)));
 
 __attribute__((noreturn))
 void _start(void) {
-    /* Keep COM1 available for early failures, but normal output goes to VGA. */
     serial_init();
 
     if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision) ||
@@ -53,16 +52,16 @@ void _start(void) {
     }
 
     mm_init(memmap_request.response, hhdm_request.response->offset);
-    if (vga_init(framebuffer_request.response) != 0) {
+    if (console_init(framebuffer_request.response) != 0) {
         for (;;) __asm__ volatile ("cli; hlt");
     }
-    vga_puts("[boot] Limine framebuffer ready\n");
+    console_puts("[boot] Limine framebuffer ready\n");
 
     cpu_init();
     gdt_init((uint64_t)(uintptr_t)(kernel_stack + sizeof(kernel_stack)));
     idt_init();
     syscall_init((uint64_t)(uintptr_t)(kernel_stack + sizeof(kernel_stack)));
-    vga_puts("[kernel] ring 0 initialized\n");
+    console_puts("[kernel] ring 0 initialized\n");
 
     user_start();
     for (;;) __asm__ volatile ("hlt");

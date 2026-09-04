@@ -10,7 +10,7 @@
 uint64_t syscall_kernel_rsp;
 uint64_t syscall_user_rsp;
 
-extern void syscall_fast_entry(void);
+extern void syscall_entry(void);
 
 static uint64_t rdmsr(uint32_t msr) {
     uint32_t lo, hi;
@@ -31,7 +31,7 @@ void syscall_init(uint64_t kernel_rsp) {
        base 0x13 -> SS 0x1b and CS 0x23. */
     uint64_t star = (0x13ULL << 48) | (0x08ULL << 32);
     wrmsr(MSR_STAR, star);
-    wrmsr(MSR_LSTAR, (uint64_t)(uintptr_t)syscall_fast_entry);
+    wrmsr(MSR_LSTAR, (uint64_t)(uintptr_t)syscall_entry);
     wrmsr(MSR_FMASK, 0x600ULL); /* clear IF and DF while handling a syscall */
     wrmsr(MSR_EFER, rdmsr(MSR_EFER) | EFER_SCE);
 }

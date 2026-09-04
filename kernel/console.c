@@ -1,6 +1,6 @@
 #include <kernel/font8x16.h>
 #include <kernel/serial.h>
-#include <kernel/vga.h>
+#include <kernel/console.h>
 #include <stdint.h>
 
 #define FONT_WIDTH 8ULL
@@ -13,6 +13,8 @@ static uint64_t cursor_col;
 static uint64_t cursor_row;
 static uint32_t fg = 0x00e6e6e6u;
 static uint32_t bg = 0x00000000u;
+
+static void console_clear(void);
 
 static uint32_t scale_channel(uint32_t value, uint8_t bits) {
     if (bits == 0) return 0;
@@ -81,7 +83,7 @@ static void scroll_one_line(void) {
     cursor_row = text_rows - 1;
 }
 
-int vga_init(struct limine_framebuffer_response *response) {
+int console_init(struct limine_framebuffer_response *response) {
     if (!response || response->framebuffer_count == 0 || !response->framebuffers) {
         serial_puts("[panic] Limine did not provide a framebuffer\n");
         return -1;
@@ -99,18 +101,18 @@ int vga_init(struct limine_framebuffer_response *response) {
     text_rows = fb->height / FONT_HEIGHT;
     cursor_col = 0;
     cursor_row = 0;
-    vga_clear();
+    console_clear();
     return 0;
 }
 
-void vga_clear(void) {
+static void console_clear(void) {
     if (!fb) return;
     fill_rect(0, 0, fb->width, fb->height, bg);
     cursor_col = 0;
     cursor_row = 0;
 }
 
-void vga_putc(char c) {
+static void console_putc(char c) {
     serial_putc(c);
     if (!fb) return;
 
@@ -121,7 +123,7 @@ void vga_putc(char c) {
         cursor_col = 0;
     } else if (c == '\t') {
         uint64_t spaces = 4 - (cursor_col & 3);
-        for (uint64_t i = 0; i < spaces; i++) vga_putc(' ');
+        for (uint64_t i = 0; i < spaces; i++) console_putc(' ');
         return;
     } else if ((unsigned char)c >= 32) {
         draw_glyph(cursor_col, cursor_row, (unsigned char)c);
@@ -135,18 +137,18 @@ void vga_putc(char c) {
     if (cursor_row >= text_rows) scroll_one_line();
 }
 
-void vga_write(const char *s, size_t n) {
-    for (size_t i = 0; i < n; i++) vga_putc(s[i]);
+void console_write(const char *s, size_t n) {
+    for (size_t i = 0; i < n; i++) console_putc(s[i]);
 }
 
-void vga_puts(const char *s) {
-    while (*s) vga_putc(*s++);
+void console_puts(const char *s) {
+    while (*s) console_putc(*s++);
 }
 
-uint16_t vga_cols(void) {
+uint16_t console_cols(void) {
     return (uint16_t)text_cols;
 }
 
-uint16_t vga_rows(void) {
+uint16_t console_rows(void) {
     return (uint16_t)text_rows;
 }

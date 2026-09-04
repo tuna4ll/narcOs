@@ -1,209 +1,85 @@
 # kernel-template
 
-A small x86_64 Limine kernel template with a real ring-3 userspace and an upstream musl libc build.
+Minimal x86_64 kernel template for Türk OSDev.
 
-The goal is not to pretend this is Linux. The template implements enough of the Linux x86_64 process/syscall ABI for a statically linked musl program to start, use stdio, allocate memory, and exit. The **full upstream musl build produces its normal `libc.a`, crt objects, and headers**; the kernel-side syscall surface is intentionally much smaller than Linux, so libc functions that need filesystems, networking, signals, processes, or real threading are not usable until those kernel facilities exist.
-
-## What is included
-
-- Limine bootloader, BIOS + UEFI ISO
-- x86_64 long mode kernel at ring 0
-- GDT + TSS + ring-3 transition
-- Limine framebuffer text console, mirrored to COM1
-- ELF64 `PT_LOAD` userspace loader
-- Linux-style initial process stack (`argc`, `argv`, `envp`, auxv)
-- x86_64 `SYSCALL` / `SYSRET` path
-- FS-base setup for musl TLS through `arch_prctl`
-- anonymous user `mmap`, `mprotect`, and `munmap`
-- upstream musl 1.2.6, built statically and unmodified
-- `/userland/hello.c` using real `<stdio.h>`, `<stdlib.h>`, and `<string.h>`
-- a libc-free syscall smoke program for kernel-side testing
-- automated host/ELF checks and QEMU serial tests
+It boots with Limine, enters ring 3, loads a static ELF user program and uses upstream musl as libc. The kernel only implements the small Linux-compatible syscall surface needed by the current userland; it is not a Linux kernel or a complete POSIX environment.
 
 ## Layout
 
 ```text
 kernel/
-  arch/x86_64/       GDT, IDT, ring3 entry, SYSCALL/SYSRET
-  include/kernel/
-  mm/                physical allocation + user mappings
-  main.c
-  syscall.c          small Linux x86_64 syscall compatibility layer
-  user.c             ELF loader + Linux initial stack/auxv
+  arch/x86_64/   GDT, IDT, exceptions, ring 3 and SYSCALL/SYSRET
+  mm/            page allocation and user mappings
+  console.c      Limine framebuffer console
+  syscall.c      minimal Linux x86_64 syscall compatibility
+  user.c         ELF loader and initial userspace stack
 userland/
-  hello.c            statically linked against upstream musl
-tests/
-  smoke.c            no-libc ring3 syscall exerciser
-  host.sh             compile/link/ELF checks
-  qemu.sh             serial boot assertions
+  hello.c
 recipes/
-  musl/
-    RECIPE           fetch, verify, patch, configure, build, install
-    patches/         optional musl patches, applied in filename order
   limine/
-    RECIPE           fetch, verify, patch, build host installer
-    patches/         optional Limine patches, applied in filename order
+    RECIPE
+    patches/
+  musl/
+    RECIPE
+    patches/
 ```
 
-## Dependencies
-
-On a typical Debian/Ubuntu host:
+## Requirements
 
 ```sh
 sudo apt install build-essential curl xorriso qemu-system-x86
 ```
 
-`make` reads package logic from `recipes/*/RECIPE`. Both musl 1.2.6 and Limine are pinned, downloaded into `.cache/sources`, and SHA-256 verified before use. There is no dependency `scripts/` directory.
-
-## Build and run
+## Run
 
 ```sh
 make run
 ```
 
-`make run` opens the QEMU framebuffer window. Normal console text also mirrors to COM1; for debugging:
+For serial output:
 
 ```sh
 make run-serial
 ```
 
-Expected demo output:
+Expected output:
 
 ```text
 [boot] Limine framebuffer ready
 [kernel] ring 0 initialized
 [user] entering ring 3
 Hello from userspace
-[musl] malloc + string are alive
-[musl] stdio + malloc + string OK
 [kernel] userspace exited
 ```
 
-The graphical `run` target intentionally leaves QEMU open after userspace exits. The automated QEMU test adds `isa-debug-exit`, allowing the guest to terminate the test VM.
-
-## musl build
-
-The default userland is `musl`. The executable is linked at the conventional low x86_64 userspace base (`0x400000`), while the kernel remains high-half. This is intentional: upstream musl/GCC startup objects use the normal x86_64 small code model and are not linkable as a non-PIE executable at the old 16 TiB demo address.
+## Build targets
 
 ```sh
-make userland
+make userland   # build musl and userland/hello.c
+make kernel     # build kernel.elf
+make iso        # build bootable ISO
+make run        # boot in QEMU
+make clean      # remove build output
+make distclean  # also remove downloaded sources/cache
 ```
 
-The flow is:
+## Recipes
 
-```text
-musl-1.2.6.tar.gz
-       |
-       +-- SHA-256 verification
-       |
-       +-- configure --disable-shared
-       |
-       +-- full upstream libc.a + crt objects + headers
-       |
-       +-- musl-gcc -static userland/hello.c
-       |
-       +-- ELF64 executable loaded by the kernel
-```
+Third-party build logic lives in `recipes/<name>/RECIPE`. Patches, when needed, go in `recipes/<name>/patches/` and are applied in filename order.
 
-The musl source is kept out of Git. To build fully offline, provide a local release tarball:
+Current dependencies:
 
-```sh
-MUSL_TARBALL=/path/to/musl-1.2.6.tar.gz make userland
-```
+- Limine 12.9.0
+- musl 1.2.6
 
-## Recipes and patches
+## Userspace
 
-Third-party dependency logic lives beside the dependency metadata instead of in loose shell scripts:
+`userland/hello.c` is linked as a static musl executable around `0x400000`. The kernel loads its ELF `PT_LOAD` segments, builds a Linux-style initial stack/auxv and enters CPL3.
 
-```text
-recipes/
-  musl/
-    RECIPE
-    patches/
-  limine/
-    RECIPE
-    patches/
-```
+The syscall path uses the native x86_64 `SYSCALL/SYSRET` mechanism. There is no legacy `int 0x80` compatibility path.
 
-`RECIPE` files are GNU Make fragments included by the root `Makefile`. Each recipe owns its version, URL, checksum, source preparation and build/install steps. Any `*.patch` file placed in that recipe's `patches/` directory is applied with `patch -p1` in lexical filename order after extraction and before building. No patch is required for the current musl or Limine versions, so those directories are intentionally empty apart from `.gitkeep`.
-
-Useful targets:
-
-```sh
-make musl       # build/install the musl recipe
-make limine     # prepare/build the Limine recipe
-make recipes    # prepare both dependencies
-make distclean  # remove build output, source trees and download cache
-```
-
-## Kernel ABI currently implemented
-
-The syscall numbers follow Linux x86_64 so upstream musl does not need a custom syscall patch.
-
-| Syscall | Purpose in this template |
-| --- | --- |
-| `read` | stdin EOF stub |
-| `write` | stdout/stderr console output |
-| `close` | stdio descriptor stub |
-| `mmap` | anonymous userspace mappings |
-| `mprotect` | page write protection |
-| `munmap` | removes user mappings |
-| `brk` | deliberately unavailable so allocation falls back to mmap |
-| `ioctl(TIOCGWINSZ)` | stdio terminal detection |
-| `writev` | musl stdio flushing |
-| `madvise` | no-op success for allocator cleanup |
-| `getpid` | single-process PID 1 |
-| `arch_prctl` | `ARCH_SET_FS` / `ARCH_GET_FS` for TLS |
-| `set_tid_address` | single-thread bootstrap stub |
-| `clock_gettime` | deterministic monotonic stub |
-| `exit` / `exit_group` | terminates userspace |
-| `getrandom` | deterministic bootstrap bytes; not cryptographic |
-
-Everything else returns `-ENOSYS`. In particular, this is **not** yet a POSIX-complete musl OS port: VFS syscalls, signals, futex/threading, sockets, fork/exec, real clocks, and secure randomness still need kernel implementations.
-
-## Tests
-
-Fast build/structure test, no QEMU or musl download required:
-
-```sh
-make test-host
-```
-
-This builds a ring-3 ELF smoke program with no libc and checks:
-
-- Linux-style fast syscalls and ELF entry
-- mmap/writev/ioctl memory + I/O path
-- FS-base TLS via `arch_prctl(ARCH_SET_FS)`
-- baseline x86-64 SSE2 execution from CPL3
-
-
-- all kernel C/assembly builds under `-Werror`
-- the userspace image is an x86_64 `ET_EXEC`
-- it contains loadable ELF segments
-- the low canonical userspace entry point is correct
-- the Limine request section is present in the kernel
-- the fast syscall entry and C dispatcher are linked
-
-Boot-test the kernel syscall ABI without musl:
-
-```sh
-make test-qemu-smoke
-```
-
-Boot-test the real musl program:
-
-```sh
-make test-qemu
-```
-
-The musl QEMU test asserts the serial log contains the userspace hello, malloc/string test, stdio test, and clean userspace exit.
-
-A full `libc-test` run is not claimed yet. Upstream recommends `libc-test` for libc ports, but running its functional suite meaningfully requires substantially more kernel API surface than this starter kernel currently provides.
-
-## Why not patch musl to use `int 0x80`?
-
-musl's x86_64 port already speaks the Linux x86_64 syscall ABI with the `syscall` instruction. Keeping musl unmodified is more useful: the kernel implements the ABI boundary, while user programs remain ordinary static musl executables.
+Currently implemented kernel-side calls include console I/O, anonymous memory mappings, `arch_prctl` for musl TLS, `set_tid_address`, basic stdio descriptor handling and process exit. Unsupported Linux syscalls return `-ENOSYS`.
 
 ## License
 
-The template code is provided under the repository license. musl is downloaded from upstream and keeps its own MIT license/copyright terms.
+Repository code is covered by `LICENSE`. Limine and musl keep their upstream licenses.

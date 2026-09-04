@@ -10,7 +10,6 @@ void mm_init(struct limine_memmap_response *map, uint64_t hhdm_offset);
 uint64_t pmm_alloc_page(void);
 void *phys_to_virt(uint64_t phys);
 void vmm_map_user(uint64_t virt, uint64_t phys, uint64_t flags);
-void vmm_map_kernel(uint64_t virt, uint64_t phys, uint64_t flags);
 int vmm_protect_user(uint64_t virt, uint64_t flags);
 int vmm_unmap_user(uint64_t virt);
 int vmm_user_range_ok(uint64_t virt, uint64_t len, int write);

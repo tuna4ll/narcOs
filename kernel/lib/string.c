@@ -12,9 +12,3 @@ void *memcpy(void *dst, const void *src, size_t n) {
     while (n--) *d++ = *s++;
     return dst;
 }
-
-size_t strlen(const char *s) {
-    size_t n = 0;
-    while (s[n]) n++;
-    return n;
-}
