@@ -12,6 +12,7 @@ static uint64_t hhdm;
 static uint64_t region_index;
 static uint64_t next_phys;
 static uint64_t region_end;
+static uint64_t free_head;
 
 static uint64_t align_up(uint64_t x, uint64_t a) {
     return (x + a - 1) & ~(a - 1);
@@ -23,6 +24,7 @@ void mm_init(struct limine_memmap_response *map, uint64_t hhdm_offset) {
     region_index = 0;
     next_phys = 0;
     region_end = 0;
+    free_head = 0;
 }
 
 void *phys_to_virt(uint64_t phys) {
@@ -30,6 +32,13 @@ void *phys_to_virt(uint64_t phys) {
 }
 
 uint64_t pmm_alloc_page(void) {
+    if (free_head) {
+        uint64_t page = free_head;
+        free_head = *(uint64_t *)phys_to_virt(page);
+        memset(phys_to_virt(page), 0, PAGE_SIZE);
+        return page;
+    }
+
     for (;;) {
         if (next_phys && next_phys + PAGE_SIZE <= region_end) {
             uint64_t page = next_phys;
@@ -48,6 +57,12 @@ uint64_t pmm_alloc_page(void) {
 
         if (!next_phys || next_phys + PAGE_SIZE > region_end) return 0;
     }
+}
+
+void pmm_free_page(uint64_t phys) {
+    if (!phys || (phys & (PAGE_SIZE - 1))) return;
+    *(uint64_t *)phys_to_virt(phys) = free_head;
+    free_head = phys;
 }
 
 static uint64_t read_cr3(void) {
