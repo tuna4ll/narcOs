@@ -132,8 +132,10 @@ int vmm_protect_user(uint64_t virt, uint64_t flags) {
 int vmm_unmap_user(uint64_t virt) {
     uint64_t *pte = get_pte(virt, 0, 0);
     if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return -1;
+    uint64_t phys = *pte & ADDR_MASK;
     *pte = 0;
     __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+    pmm_free_page(phys);
     return 0;
 }
 
