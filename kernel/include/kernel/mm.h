@@ -6,12 +6,20 @@
 #define PAGE_SIZE 4096ULL
 #define VMM_WRITE (1ULL << 1)
 
+struct address_space {
+    uint64_t root;
+};
+
 void mm_init(struct limine_memmap_response *map, uint64_t hhdm_offset);
 uint64_t pmm_alloc_page(void);
 void pmm_free_page(uint64_t phys);
 void *phys_to_virt(uint64_t phys);
-int vmm_map_user(uint64_t virt, uint64_t phys, uint64_t flags);
-int vmm_protect_user(uint64_t virt, uint64_t flags);
-int vmm_unmap_user(uint64_t virt);
-int vmm_user_range_ok(uint64_t virt, uint64_t len, int write);
-uint64_t vmm_user_phys(uint64_t virt);
+int vmm_space_create(struct address_space *space);
+void vmm_space_activate(struct address_space *space);
+void vmm_space_destroy(struct address_space *space);
+struct address_space *vmm_space_current(void);
+int vmm_map_user(struct address_space *space, uint64_t virt, uint64_t phys, uint64_t flags);
+int vmm_protect_user(struct address_space *space, uint64_t virt, uint64_t flags);
+int vmm_unmap_user(struct address_space *space, uint64_t virt);
+int vmm_user_range_ok(struct address_space *space, uint64_t virt, uint64_t len, int write);
+uint64_t vmm_user_phys(struct address_space *space, uint64_t virt);

@@ -13,6 +13,7 @@ static uint64_t region_index;
 static uint64_t next_phys;
 static uint64_t region_end;
 static uint64_t free_head;
+static struct address_space *current_space;
 
 static uint64_t align_up(uint64_t x, uint64_t a) {
     return (x + a - 1) & ~(a - 1);
@@ -88,8 +89,8 @@ static uint64_t *next_table(uint64_t *table, size_t index, int create, int user)
     return phys_to_virt(entry & ADDR_MASK);
 }
 
-static uint64_t *get_pte(uint64_t virt, int create, int user) {
-    uint64_t *pml4 = phys_to_virt(read_cr3());
+static uint64_t *get_pte(struct address_space *space, uint64_t virt, int create, int user) {
+    uint64_t *pml4 = phys_to_virt(space->root);
     size_t i4 = (virt >> 39) & 0x1ff;
     size_t i3 = (virt >> 30) & 0x1ff;
     size_t i2 = (virt >> 21) & 0x1ff;
@@ -104,49 +105,89 @@ static uint64_t *get_pte(uint64_t virt, int create, int user) {
     return &pt[i1];
 }
 
-static int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags, int user) {
-    uint64_t *pte = get_pte(virt, 1, user);
+static int vmm_map(struct address_space *space, uint64_t virt, uint64_t phys, uint64_t flags, int user) {
+    uint64_t *pte = get_pte(space, virt, 1, user);
     if (!pte) return -1;
 
     uint64_t bits = PTE_PRESENT;
     if (user) bits |= PTE_USER;
     if (flags & VMM_WRITE) bits |= PTE_WRITE;
     *pte = (phys & ADDR_MASK) | bits;
-    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+    if (read_cr3() == space->root) __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
     return 0;
 }
 
-int vmm_map_user(uint64_t virt, uint64_t phys, uint64_t flags) {
-    return vmm_map(virt, phys, flags, 1);
+int vmm_space_create(struct address_space *space) {
+    uint64_t root = pmm_alloc_page();
+    if (!root) return -1;
+    uint64_t *dst = phys_to_virt(root);
+    uint64_t *src = phys_to_virt(read_cr3());
+    for (size_t i = 256; i < 512; i++) dst[i] = src[i];
+    space->root = root;
+    return 0;
 }
 
+void vmm_space_activate(struct address_space *space) {
+    current_space = space;
+    __asm__ volatile ("mov %0, %%cr3" : : "r"(space->root) : "memory");
+}
 
-int vmm_protect_user(uint64_t virt, uint64_t flags) {
-    uint64_t *pte = get_pte(virt, 0, 0);
+static void free_table(uint64_t phys, unsigned level) {
+    uint64_t *table = phys_to_virt(phys);
+    for (size_t i = 0; i < 512; i++) {
+        uint64_t entry = table[i];
+        if (!(entry & PTE_PRESENT)) continue;
+        uint64_t child = entry & ADDR_MASK;
+        if (level == 1 || (entry & PTE_HUGE)) pmm_free_page(child);
+        else free_table(child, level - 1);
+    }
+    pmm_free_page(phys);
+}
+
+void vmm_space_destroy(struct address_space *space) {
+    if (!space->root || read_cr3() == space->root) return;
+    uint64_t *root = phys_to_virt(space->root);
+    for (size_t i = 0; i < 256; i++) {
+        if (root[i] & PTE_PRESENT) free_table(root[i] & ADDR_MASK, 3);
+    }
+    pmm_free_page(space->root);
+    space->root = 0;
+}
+
+struct address_space *vmm_space_current(void) {
+    return current_space;
+}
+
+int vmm_map_user(struct address_space *space, uint64_t virt, uint64_t phys, uint64_t flags) {
+    return vmm_map(space, virt, phys, flags, 1);
+}
+
+int vmm_protect_user(struct address_space *space, uint64_t virt, uint64_t flags) {
+    uint64_t *pte = get_pte(space, virt, 0, 0);
     if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return -1;
     if (flags & VMM_WRITE) *pte |= PTE_WRITE;
     else *pte &= ~PTE_WRITE;
-    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+    if (read_cr3() == space->root) __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
     return 0;
 }
 
-int vmm_unmap_user(uint64_t virt) {
-    uint64_t *pte = get_pte(virt, 0, 0);
+int vmm_unmap_user(struct address_space *space, uint64_t virt) {
+    uint64_t *pte = get_pte(space, virt, 0, 0);
     if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return -1;
     uint64_t phys = *pte & ADDR_MASK;
     *pte = 0;
-    __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+    if (read_cr3() == space->root) __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
     pmm_free_page(phys);
     return 0;
 }
 
-uint64_t vmm_user_phys(uint64_t virt) {
-    uint64_t *pte = get_pte(virt, 0, 0);
+uint64_t vmm_user_phys(struct address_space *space, uint64_t virt) {
+    uint64_t *pte = get_pte(space, virt, 0, 0);
     if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return 0;
     return (*pte & ADDR_MASK) | (virt & (PAGE_SIZE - 1));
 }
 
-int vmm_user_range_ok(uint64_t virt, uint64_t len, int write) {
+int vmm_user_range_ok(struct address_space *space, uint64_t virt, uint64_t len, int write) {
     if (!len) return 1;
     if (virt > 0x00007fffffffffffULL) return 0;
     if (len - 1 > 0x00007fffffffffffULL - virt) return 0;
@@ -155,7 +196,7 @@ int vmm_user_range_ok(uint64_t virt, uint64_t len, int write) {
     uint64_t page = virt & ~(PAGE_SIZE - 1);
     uint64_t last = end & ~(PAGE_SIZE - 1);
     for (;;) {
-        uint64_t *pte = get_pte(page, 0, 0);
+        uint64_t *pte = get_pte(space, page, 0, 0);
         if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return 0;
         if (write && !(*pte & PTE_WRITE)) return 0;
         if (page == last) break;

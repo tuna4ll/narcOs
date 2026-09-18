@@ -65,10 +65,11 @@ static void wrmsr(uint32_t msr, uint64_t value) {
 
 static int copy_from_user(void *dst, uint64_t src, size_t len) {
     uint8_t *out = dst;
-    if (!vmm_user_range_ok(src, len, 0)) return -1;
+    struct address_space *space = vmm_space_current();
+    if (!vmm_user_range_ok(space, src, len, 0)) return -1;
 
     while (len) {
-        uint64_t phys = vmm_user_phys(src);
+        uint64_t phys = vmm_user_phys(space, src);
         if (!phys) return -1;
 
         size_t chunk = PAGE_SIZE - (size_t)(src & (PAGE_SIZE - 1));
@@ -86,10 +87,11 @@ static int copy_from_user(void *dst, uint64_t src, size_t len) {
 
 static int copy_to_user(uint64_t dst, const void *src, size_t len) {
     const uint8_t *in = src;
-    if (!vmm_user_range_ok(dst, len, 1)) return -1;
+    struct address_space *space = vmm_space_current();
+    if (!vmm_user_range_ok(space, dst, len, 1)) return -1;
 
     while (len) {
-        uint64_t phys = vmm_user_phys(dst);
+        uint64_t phys = vmm_user_phys(space, dst);
         if (!phys) return -1;
 
         size_t chunk = PAGE_SIZE - (size_t)(dst & (PAGE_SIZE - 1));
@@ -107,10 +109,11 @@ static int copy_to_user(uint64_t dst, const void *src, size_t len) {
 
 static long sys_write(uint64_t fd, uint64_t buf, uint64_t len) {
     if (fd != 1 && fd != 2) return -EBADF;
-    if (!vmm_user_range_ok(buf, len, 0)) return -EFAULT;
+    struct address_space *space = vmm_space_current();
+    if (!vmm_user_range_ok(space, buf, len, 0)) return -EFAULT;
 
     for (uint64_t left = len, ptr = buf; left;) {
-        uint64_t phys = vmm_user_phys(ptr);
+        uint64_t phys = vmm_user_phys(space, ptr);
         if (!phys) return -EFAULT;
 
         size_t chunk = PAGE_SIZE - (size_t)(ptr & (PAGE_SIZE - 1));
@@ -148,18 +151,19 @@ static long sys_mmap(uint64_t addr, uint64_t len, uint64_t prot, uint64_t flags,
     uint64_t base = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) ? addr : align_up(mmap_next);
     if ((base & (PAGE_SIZE - 1)) || base < USER_MMAP_BASE || size > USER_MMAP_END - base) return -ENOMEM;
 
+    struct address_space *space = vmm_space_current();
     uint64_t mapped = 0;
     for (uint64_t off = 0; off < size; off += PAGE_SIZE) {
         uint64_t va = base + off;
-        if (vmm_user_phys(va)) {
+        if (vmm_user_phys(space, va)) {
             if (flags & MAP_FIXED_NOREPLACE) goto fail;
             if (!(flags & MAP_FIXED)) goto fail;
-            vmm_unmap_user(va);
+            vmm_unmap_user(space, va);
         }
 
         uint64_t phys = pmm_alloc_page();
         if (!phys) goto fail;
-        if (vmm_map_user(va, phys, (prot & PROT_WRITE) ? VMM_WRITE : 0) != 0) {
+        if (vmm_map_user(space, va, phys, (prot & PROT_WRITE) ? VMM_WRITE : 0) != 0) {
             pmm_free_page(phys);
             goto fail;
         }
@@ -170,7 +174,7 @@ static long sys_mmap(uint64_t addr, uint64_t len, uint64_t prot, uint64_t flags,
     return (long)base;
 
 fail:
-    for (uint64_t off = 0; off < mapped; off += PAGE_SIZE) vmm_unmap_user(base + off);
+    for (uint64_t off = 0; off < mapped; off += PAGE_SIZE) vmm_unmap_user(space, base + off);
     return -ENOMEM;
 }
 
@@ -180,7 +184,8 @@ static long sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot) {
     if (!size) return -EINVAL;
 
     for (uint64_t off = 0; off < size; off += PAGE_SIZE) {
-        if (vmm_protect_user(addr + off, (prot & PROT_WRITE) ? VMM_WRITE : 0) != 0) return -ENOMEM;
+        if (vmm_protect_user(vmm_space_current(), addr + off,
+                             (prot & PROT_WRITE) ? VMM_WRITE : 0) != 0) return -ENOMEM;
     }
     return 0;
 }
@@ -190,7 +195,8 @@ static long sys_munmap(uint64_t addr, uint64_t len) {
     uint64_t size = align_up(len);
     if (!size) return -EINVAL;
 
-    for (uint64_t off = 0; off < size; off += PAGE_SIZE) vmm_unmap_user(addr + off);
+    for (uint64_t off = 0; off < size; off += PAGE_SIZE)
+        vmm_unmap_user(vmm_space_current(), addr + off);
     return 0;
 }
 

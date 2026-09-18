@@ -56,6 +56,7 @@ struct __attribute__((packed)) elf64_phdr {
 extern const unsigned char user_blob_start[];
 extern const unsigned char user_blob_end[];
 extern void enter_userspace(uint64_t entry, uint64_t stack);
+static struct address_space user_space;
 
 static uint64_t align_down(uint64_t x) {
     return x & ~(PAGE_SIZE - 1);
@@ -75,7 +76,7 @@ static __attribute__((noreturn)) void user_panic(const char *msg) {
 static void user_copy_out(uint64_t dst, const void *src, size_t len) {
     const uint8_t *s = src;
     while (len) {
-        uint64_t phys = vmm_user_phys(dst);
+        uint64_t phys = vmm_user_phys(&user_space, dst);
         if (!phys) user_panic("copy to unmapped page");
         size_t chunk = PAGE_SIZE - (size_t)(dst & (PAGE_SIZE - 1));
         if (chunk > len) chunk = len;
@@ -88,7 +89,7 @@ static void user_copy_out(uint64_t dst, const void *src, size_t len) {
 
 static void user_zero(uint64_t dst, size_t len) {
     while (len) {
-        uint64_t phys = vmm_user_phys(dst);
+        uint64_t phys = vmm_user_phys(&user_space, dst);
         if (!phys) user_panic("zero of unmapped page");
         size_t chunk = PAGE_SIZE - (size_t)(dst & (PAGE_SIZE - 1));
         if (chunk > len) chunk = len;
@@ -100,11 +101,11 @@ static void user_zero(uint64_t dst, size_t len) {
 
 static void map_range(uint64_t start, uint64_t end) {
     for (uint64_t va = align_down(start); va < align_up(end); va += PAGE_SIZE) {
-        if (vmm_user_phys(va)) continue;
+        if (vmm_user_phys(&user_space, va)) continue;
         uint64_t phys = pmm_alloc_page();
         if (!phys) user_panic("out of physical memory");
         /* Load writable, then tighten permissions once segment data is copied. */
-        if (vmm_map_user(va, phys, VMM_WRITE) != 0) user_panic("failed to map image");
+        if (vmm_map_user(&user_space, va, phys, VMM_WRITE) != 0) user_panic("failed to map image");
     }
 }
 
@@ -141,7 +142,7 @@ static uint64_t build_linux_stack(const struct elf64_ehdr *eh, uint64_t phdr_add
     for (uint64_t va = USER_STACK_TOP - USER_STACK_SIZE; va < USER_STACK_TOP; va += PAGE_SIZE) {
         uint64_t phys = pmm_alloc_page();
         if (!phys) user_panic("out of physical memory for stack");
-        if (vmm_map_user(va, phys, VMM_WRITE) != 0) user_panic("failed to map stack");
+        if (vmm_map_user(&user_space, va, phys, VMM_WRITE) != 0) user_panic("failed to map stack");
     }
 
     uint64_t sp = USER_STACK_TOP;
@@ -171,6 +172,7 @@ static uint64_t build_linux_stack(const struct elf64_ehdr *eh, uint64_t phdr_add
 }
 
 void user_start(void) {
+    if (vmm_space_create(&user_space) != 0) user_panic("cannot create address space");
     size_t blob_size = (size_t)(user_blob_end - user_blob_start);
     if (blob_size < sizeof(struct elf64_ehdr)) user_panic("ELF is truncated");
 
@@ -204,7 +206,7 @@ void user_start(void) {
     for (uint16_t i = 0; i < eh->phnum; i++) {
         if (ph[i].type != PT_LOAD || !ph[i].memsz) continue;
         for (uint64_t va = align_down(ph[i].vaddr); va < align_up(ph[i].vaddr + ph[i].memsz); va += PAGE_SIZE) {
-            if (vmm_protect_user(va, (ph[i].flags & PF_W) ? VMM_WRITE : 0) != 0)
+            if (vmm_protect_user(&user_space, va, (ph[i].flags & PF_W) ? VMM_WRITE : 0) != 0)
                 user_panic("failed to protect PT_LOAD");
         }
     }
@@ -214,5 +216,6 @@ void user_start(void) {
     uint64_t stack = build_linux_stack(eh, phdr_addr);
 
     console_puts("[user] entering ring 3\n");
+    vmm_space_activate(&user_space);
     enter_userspace(eh->entry, stack);
 }
