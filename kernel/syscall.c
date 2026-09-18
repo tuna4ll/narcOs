@@ -1,6 +1,7 @@
 #include <kernel/console.h>
 #include <kernel/mm.h>
 #include <kernel/syscall.h>
+#include <kernel/task.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -13,6 +14,7 @@
 #define SYS_BRK               12
 #define SYS_IOCTL             16
 #define SYS_WRITEV            20
+#define SYS_SCHED_YIELD       24
 #define SYS_MADVISE           28
 #define SYS_GETPID            39
 #define SYS_EXIT              60
@@ -34,8 +36,6 @@
 #define ARCH_SET_FS          0x1002
 #define ARCH_GET_FS          0x1003
 #define TIOCGWINSZ           0x5413
-#define IA32_FS_BASE         0xc0000100u
-
 #define USER_MMAP_BASE 0x0000100010000000ULL
 #define USER_MMAP_END  0x0000100040000000ULL
 
@@ -51,16 +51,9 @@ struct winsize64 {
     uint16_t ypixel;
 };
 
-static uint64_t mmap_next = USER_MMAP_BASE;
-static uint64_t fs_base;
-
 static uint64_t align_up(uint64_t value) {
     if (value > UINT64_MAX - (PAGE_SIZE - 1)) return 0;
     return (value + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-}
-
-static void wrmsr(uint32_t msr, uint64_t value) {
-    __asm__ volatile ("wrmsr" : : "c"(msr), "a"((uint32_t)value), "d"((uint32_t)(value >> 32)));
 }
 
 static int copy_from_user(void *dst, uint64_t src, size_t len) {
@@ -148,7 +141,7 @@ static long sys_mmap(uint64_t addr, uint64_t len, uint64_t prot, uint64_t flags,
     uint64_t size = align_up(len);
     if (!size) return -ENOMEM;
 
-    uint64_t base = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) ? addr : align_up(mmap_next);
+    uint64_t base = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) ? addr : align_up(task_mmap_next());
     if ((base & (PAGE_SIZE - 1)) || base < USER_MMAP_BASE || size > USER_MMAP_END - base) return -ENOMEM;
 
     struct address_space *space = vmm_space_current();
@@ -170,7 +163,7 @@ static long sys_mmap(uint64_t addr, uint64_t len, uint64_t prot, uint64_t flags,
         mapped += PAGE_SIZE;
     }
 
-    if (!(flags & (MAP_FIXED | MAP_FIXED_NOREPLACE))) mmap_next = base + size;
+    if (!(flags & (MAP_FIXED | MAP_FIXED_NOREPLACE))) task_set_mmap_next(base + size);
     return (long)base;
 
 fail:
@@ -214,11 +207,11 @@ static long sys_ioctl(uint64_t fd, uint64_t request, uint64_t arg) {
 static long sys_arch_prctl(uint64_t code, uint64_t addr) {
     if (code == ARCH_SET_FS) {
         if (addr > 0x00007fffffffffffULL) return -EINVAL;
-        fs_base = addr;
-        wrmsr(IA32_FS_BASE, addr);
+        task_set_fs_base(addr);
         return 0;
     }
     if (code == ARCH_GET_FS) {
+        uint64_t fs_base = task_fs_base();
         return copy_to_user(addr, &fs_base, sizeof(fs_base)) == 0 ? 0 : -EFAULT;
     }
     return -EINVAL;
@@ -239,19 +232,25 @@ static long dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
     case SYS_IOCTL:           return sys_ioctl(a1, a2, a3);
     case SYS_WRITEV:          return sys_writev(a1, a2, a3);
     case SYS_MADVISE:         return 0;
-    case SYS_GETPID:          return 1;
+    case SYS_GETPID:          return task_pid();
     case SYS_ARCH_PRCTL:      return sys_arch_prctl(a1, a2);
-    case SYS_SET_TID_ADDRESS: return 1;
-    case SYS_EXIT:
-    case SYS_EXIT_GROUP:
-        console_puts("[kernel] userspace exited\n");
-        for (;;) __asm__ volatile ("cli; hlt");
+    case SYS_SET_TID_ADDRESS: return task_pid();
     default:
         return -ENOSYS;
     }
 }
 
-void syscall_dispatch(struct syscall_frame *frame) {
-    frame->rax = (uint64_t)dispatch(frame->rax, frame->rdi, frame->rsi, frame->rdx,
+void syscall_dispatch(struct task_frame *frame) {
+    uint64_t nr = frame->rax;
+    if (nr == SYS_SCHED_YIELD) {
+        frame->rax = 0;
+        task_yield(frame);
+        return;
+    }
+    if (nr == SYS_EXIT || nr == SYS_EXIT_GROUP) {
+        task_exit(frame);
+        return;
+    }
+    frame->rax = (uint64_t)dispatch(nr, frame->rdi, frame->rsi, frame->rdx,
                                     frame->r10, frame->r8, frame->r9);
 }

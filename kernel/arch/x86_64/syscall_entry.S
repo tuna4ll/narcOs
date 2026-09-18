@@ -6,16 +6,13 @@
 .extern syscall_dispatch
 
 syscall_entry:
-    /* SYSCALL does not switch stacks on x86_64. Save the userspace RSP
-       before touching the kernel stack. This template is deliberately
-       single-core/single-process, so one scratch slot is sufficient. */
     movq %rsp, syscall_user_rsp(%rip)
     movq syscall_kernel_rsp(%rip), %rsp
 
-    /* Keep this layout in sync with struct syscall_frame. Ten pushes
-       also leave the stack correctly aligned for the SysV C call below. */
+    pushq $0x1b
     pushq syscall_user_rsp(%rip)
     pushq %r11
+    pushq $0x23
     pushq %rcx
     pushq %r9
     pushq %r8
@@ -24,22 +21,31 @@ syscall_entry:
     pushq %rsi
     pushq %rdi
     pushq %rax
+    pushq %rbx
+    pushq %rbp
+    pushq %r12
+    pushq %r13
+    pushq %r14
+    pushq %r15
 
     movq %rsp, %rdi
     call syscall_dispatch
 
-    /* The C dispatcher is allowed to clobber all SysV caller-saved
-       registers, but userspace syscall wrappers only expect RAX plus the
-       architectural RCX/R11 clobbers. Restore the argument registers. */
-    movq 0(%rsp), %rax
-    movq 8(%rsp), %rdi
-    movq 16(%rsp), %rsi
-    movq 24(%rsp), %rdx
-    movq 32(%rsp), %r10
-    movq 40(%rsp), %r8
-    movq 48(%rsp), %r9
-    movq 56(%rsp), %rcx
-    movq 64(%rsp), %r11
-    movq 72(%rsp), %rsp
+    movq 0(%rsp), %r15
+    movq 8(%rsp), %r14
+    movq 16(%rsp), %r13
+    movq 24(%rsp), %r12
+    movq 32(%rsp), %rbp
+    movq 40(%rsp), %rbx
+    movq 48(%rsp), %rax
+    movq 56(%rsp), %rdi
+    movq 64(%rsp), %rsi
+    movq 72(%rsp), %rdx
+    movq 80(%rsp), %r10
+    movq 88(%rsp), %r8
+    movq 96(%rsp), %r9
+    movq 104(%rsp), %rcx
+    movq 120(%rsp), %r11
+    movq 128(%rsp), %rsp
     sysretq
 .size syscall_entry, .-syscall_entry
