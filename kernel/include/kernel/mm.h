@@ -23,3 +23,4 @@ int vmm_protect_user(struct address_space *space, uint64_t virt, uint64_t flags)
 int vmm_unmap_user(struct address_space *space, uint64_t virt);
 int vmm_user_range_ok(struct address_space *space, uint64_t virt, uint64_t len, int write);
 uint64_t vmm_user_phys(struct address_space *space, uint64_t virt);
+int vmm_map_kernel(uint64_t virt, uint64_t phys, uint64_t flags);

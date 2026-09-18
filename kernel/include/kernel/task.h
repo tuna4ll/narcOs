@@ -15,6 +15,7 @@ struct address_space *task_space(struct task *task);
 void task_set_entry(struct task *task, uint64_t rip, uint64_t rsp);
 void task_start(void) __attribute__((noreturn));
 void task_yield(struct task_frame *frame);
+void task_preempt(struct task_frame *frame);
 void task_exit(struct task_frame *frame);
 int task_pid(void);
 uint64_t task_fs_base(void);

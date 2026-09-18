@@ -26,7 +26,7 @@ extern void exception_ss(void);
 extern void exception_gp(void);
 extern void exception_pf(void);
 
-static void set_gate(unsigned vector, void (*handler)(void)) {
+void idt_set_gate(unsigned vector, void (*handler)(void)) {
     uint64_t addr = (uint64_t)(uintptr_t)handler;
     idt[vector] = (struct idt_entry){
         .offset_low = addr,
@@ -39,12 +39,12 @@ static void set_gate(unsigned vector, void (*handler)(void)) {
 
 void idt_init(void) {
     memset(idt, 0, sizeof(idt));
-    set_gate(6, exception_ud);
-    set_gate(8, exception_df);
-    set_gate(11, exception_np);
-    set_gate(12, exception_ss);
-    set_gate(13, exception_gp);
-    set_gate(14, exception_pf);
+    idt_set_gate(6, exception_ud);
+    idt_set_gate(8, exception_df);
+    idt_set_gate(11, exception_np);
+    idt_set_gate(12, exception_ss);
+    idt_set_gate(13, exception_gp);
+    idt_set_gate(14, exception_pf);
 
     struct idtr ptr = {
         .limit = sizeof(idt) - 1,

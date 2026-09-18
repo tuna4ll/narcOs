@@ -162,6 +162,11 @@ int vmm_map_user(struct address_space *space, uint64_t virt, uint64_t phys, uint
     return vmm_map(space, virt, phys, flags, 1);
 }
 
+int vmm_map_kernel(uint64_t virt, uint64_t phys, uint64_t flags) {
+    struct address_space space = { .root = read_cr3() };
+    return vmm_map(&space, virt, phys, flags, 0);
+}
+
 int vmm_protect_user(struct address_space *space, uint64_t virt, uint64_t flags) {
     uint64_t *pte = get_pte(space, virt, 0, 0);
     if (!pte || !(*pte & PTE_PRESENT) || !(*pte & PTE_USER)) return -1;

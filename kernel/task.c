@@ -13,6 +13,7 @@ struct task {
     struct task_frame frame;
     uint64_t fs_base;
     uint64_t mmap_next;
+    uint8_t fpu[512] __attribute__((aligned(16)));
 };
 
 static struct task tasks[TASK_MAX];
@@ -35,10 +36,14 @@ static struct task *next_task(void) {
 }
 
 static void switch_to(struct task *next, struct task_frame *frame) {
-    if (current) current->frame = *frame;
+    if (current) {
+        current->frame = *frame;
+        __asm__ volatile ("fxsave64 %0" : "=m"(current->fpu));
+    }
     current = next;
     vmm_space_activate(&current->space);
     set_fs(current->fs_base);
+    __asm__ volatile ("fxrstor64 %0" : : "m"(current->fpu));
     *frame = current->frame;
 }
 
@@ -53,7 +58,8 @@ struct task *task_create(void) {
         task->mmap_next = USER_MMAP_BASE;
         task->frame.cs = 0x23;
         task->frame.ss = 0x1b;
-        task->frame.rflags = 0x2;
+        task->frame.rflags = 0x202;
+        __asm__ volatile ("fninit; fxsave64 %0" : "=m"(task->fpu));
         return task;
     }
     return 0;
@@ -73,6 +79,7 @@ void task_start(void) {
     if (!current) goto done;
     vmm_space_activate(&current->space);
     set_fs(current->fs_base);
+    __asm__ volatile ("fxrstor64 %0" : : "m"(current->fpu));
     task_enter(&current->frame);
 done:
     for (;;) __asm__ volatile ("cli; hlt");
@@ -81,6 +88,10 @@ done:
 void task_yield(struct task_frame *frame) {
     struct task *next = next_task();
     if (next && next != current) switch_to(next, frame);
+}
+
+void task_preempt(struct task_frame *frame) {
+    task_yield(frame);
 }
 
 void task_exit(struct task_frame *frame) {

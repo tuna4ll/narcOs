@@ -2,16 +2,17 @@
 
 Minimal x86_64 kernel template for Türk OSDev.
 
-It boots with Limine, enters ring 3, loads a static ELF user program and uses upstream musl as libc. The kernel only implements the small Linux-compatible syscall surface needed by the current userland; it is not a Linux kernel or a complete POSIX environment.
+It boots with Limine, runs isolated ring-3 processes with a preemptive scheduler and uses upstream musl as libc. The kernel only implements the small Linux-compatible syscall surface needed by the current userland; it is not a Linux kernel or a complete POSIX environment.
 
 ## Layout
 
 ```text
 kernel/
-  arch/x86_64/   GDT, IDT, exceptions, ring 3 and SYSCALL/SYSRET
-  mm/            page allocation and user mappings
+  arch/x86_64/   CPU setup, exceptions, syscalls and timer IRQ
+  mm/            physical allocation and isolated address spaces
   console.c      Limine framebuffer console
   syscall.c      minimal Linux x86_64 syscall compatibility
+  task.c         round-robin process scheduler
   user.c         ELF loader and initial userspace stack
 userland/
   hello.c
@@ -48,7 +49,9 @@ Expected output:
 [boot] Limine framebuffer ready
 [kernel] ring 0 initialized
 [user] entering ring 3
-Hello from userspace
+Hello from process 1 (1)
+Hello from process 2 (1)
+...
 [kernel] userspace exited
 ```
 
@@ -74,11 +77,11 @@ Current dependencies:
 
 ## Userspace
 
-`userland/hello.c` is linked as a static musl executable around `0x400000`. The kernel loads its ELF `PT_LOAD` segments, builds a Linux-style initial stack/auxv and enters CPL3.
+`userland/hello.c` is linked as a static musl executable around `0x400000`. The kernel loads two instances into separate page tables, builds Linux-style initial stacks and schedules them from a local APIC timer.
 
 The syscall path uses the native x86_64 `SYSCALL/SYSRET` mechanism. There is no legacy `int 0x80` compatibility path.
 
-Currently implemented kernel-side calls include console I/O, anonymous memory mappings, `arch_prctl` for musl TLS, `set_tid_address`, basic stdio descriptor handling and process exit. Unsupported Linux syscalls return `-ENOSYS`.
+Currently implemented kernel-side calls include console I/O, anonymous memory mappings, `sched_yield`, `getpid`, `arch_prctl`, `set_tid_address`, basic stdio descriptor handling and process exit. Unsupported Linux syscalls return `-ENOSYS`.
 
 ## License
 
