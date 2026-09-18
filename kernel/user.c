@@ -104,7 +104,7 @@ static void map_range(uint64_t start, uint64_t end) {
         uint64_t phys = pmm_alloc_page();
         if (!phys) user_panic("out of physical memory");
         /* Load writable, then tighten permissions once segment data is copied. */
-        vmm_map_user(va, phys, VMM_WRITE);
+        if (vmm_map_user(va, phys, VMM_WRITE) != 0) user_panic("failed to map image");
     }
 }
 
@@ -141,7 +141,7 @@ static uint64_t build_linux_stack(const struct elf64_ehdr *eh, uint64_t phdr_add
     for (uint64_t va = USER_STACK_TOP - USER_STACK_SIZE; va < USER_STACK_TOP; va += PAGE_SIZE) {
         uint64_t phys = pmm_alloc_page();
         if (!phys) user_panic("out of physical memory for stack");
-        vmm_map_user(va, phys, VMM_WRITE);
+        if (vmm_map_user(va, phys, VMM_WRITE) != 0) user_panic("failed to map stack");
     }
 
     uint64_t sp = USER_STACK_TOP;

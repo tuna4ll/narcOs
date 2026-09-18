@@ -148,21 +148,30 @@ static long sys_mmap(uint64_t addr, uint64_t len, uint64_t prot, uint64_t flags,
     uint64_t base = (flags & (MAP_FIXED | MAP_FIXED_NOREPLACE)) ? addr : align_up(mmap_next);
     if ((base & (PAGE_SIZE - 1)) || base < USER_MMAP_BASE || size > USER_MMAP_END - base) return -ENOMEM;
 
+    uint64_t mapped = 0;
     for (uint64_t off = 0; off < size; off += PAGE_SIZE) {
         uint64_t va = base + off;
         if (vmm_user_phys(va)) {
-            if (flags & MAP_FIXED_NOREPLACE) return -ENOMEM;
-            if (!(flags & MAP_FIXED)) return -ENOMEM;
+            if (flags & MAP_FIXED_NOREPLACE) goto fail;
+            if (!(flags & MAP_FIXED)) goto fail;
             vmm_unmap_user(va);
         }
 
         uint64_t phys = pmm_alloc_page();
-        if (!phys) return -ENOMEM;
-        vmm_map_user(va, phys, (prot & PROT_WRITE) ? VMM_WRITE : 0);
+        if (!phys) goto fail;
+        if (vmm_map_user(va, phys, (prot & PROT_WRITE) ? VMM_WRITE : 0) != 0) {
+            pmm_free_page(phys);
+            goto fail;
+        }
+        mapped += PAGE_SIZE;
     }
 
     if (!(flags & (MAP_FIXED | MAP_FIXED_NOREPLACE))) mmap_next = base + size;
     return (long)base;
+
+fail:
+    for (uint64_t off = 0; off < mapped; off += PAGE_SIZE) vmm_unmap_user(base + off);
+    return -ENOMEM;
 }
 
 static long sys_mprotect(uint64_t addr, uint64_t len, uint64_t prot) {

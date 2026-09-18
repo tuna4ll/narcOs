@@ -104,19 +104,20 @@ static uint64_t *get_pte(uint64_t virt, int create, int user) {
     return &pt[i1];
 }
 
-static void vmm_map(uint64_t virt, uint64_t phys, uint64_t flags, int user) {
+static int vmm_map(uint64_t virt, uint64_t phys, uint64_t flags, int user) {
     uint64_t *pte = get_pte(virt, 1, user);
-    if (!pte) return;
+    if (!pte) return -1;
 
     uint64_t bits = PTE_PRESENT;
     if (user) bits |= PTE_USER;
     if (flags & VMM_WRITE) bits |= PTE_WRITE;
     *pte = (phys & ADDR_MASK) | bits;
     __asm__ volatile ("invlpg (%0)" : : "r"(virt) : "memory");
+    return 0;
 }
 
-void vmm_map_user(uint64_t virt, uint64_t phys, uint64_t flags) {
-    vmm_map(virt, phys, flags, 1);
+int vmm_map_user(uint64_t virt, uint64_t phys, uint64_t flags) {
+    return vmm_map(virt, phys, flags, 1);
 }
 
 
