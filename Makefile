@@ -61,15 +61,15 @@ iso: $(BUILD)/kernel.elf $(LIMINE_TOOL)
 		-b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table \
 		-hfsplus -apm-block-size 2048 --efi-boot boot/limine/limine-uefi-cd.bin \
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
-		$(BUILD)/iso_root -o $(DIST)/kernel-template.iso
-	$(LIMINE_TOOL) bios-install $(DIST)/kernel-template.iso
+		$(BUILD)/iso_root -o $(DIST)/narcOs.iso
+	$(LIMINE_TOOL) bios-install $(DIST)/narcOs.iso
 
 run: iso
-	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/kernel-template.iso \
+	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/narcOs.iso \
 		-serial none -monitor none -no-reboot -no-shutdown
 
 run-serial: iso
-	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/kernel-template.iso \
+	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/narcOs.iso \
 		-serial stdio -monitor none -no-reboot -no-shutdown
 
 clean:

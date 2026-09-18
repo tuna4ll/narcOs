@@ -1,4 +1,4 @@
-# kernel-template
+# narcOs
 
 Minimal x86_64 kernel template for Türk OSDev.
 
