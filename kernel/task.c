@@ -1,10 +1,12 @@
 #include <kernel/console.h>
 #include <kernel/task.h>
 #include <kernel/string.h>
+#include <kernel/vfs.h>
 
 #define TASK_MAX 2
 #define IA32_FS_BASE 0xc0000100u
 #define USER_MMAP_BASE 0x0000100010000000ULL
+#define TASK_FD_MAX 16
 
 struct task {
     int pid;
@@ -14,6 +16,8 @@ struct task {
     uint64_t fs_base;
     uint64_t mmap_next;
     uint8_t fpu[512] __attribute__((aligned(16)));
+    struct file files[TASK_FD_MAX];
+    uint8_t fd_used[TASK_FD_MAX];
 };
 
 static struct task tasks[TASK_MAX];
@@ -126,4 +130,26 @@ uint64_t task_mmap_next(void) {
 
 void task_set_mmap_next(uint64_t value) {
     current->mmap_next = value;
+}
+
+int task_fd_open(const char *path) {
+    for (int fd = 3; fd < TASK_FD_MAX; fd++) {
+        if (current->fd_used[fd]) continue;
+        if (vfs_open(path, &current->files[fd]) != 0) return -1;
+        current->fd_used[fd] = 1;
+        return fd;
+    }
+    return -1;
+}
+
+struct file *task_fd_get(int fd) {
+    if (fd < 3 || fd >= TASK_FD_MAX || !current->fd_used[fd]) return 0;
+    return &current->files[fd];
+}
+
+int task_fd_close(int fd) {
+    if (!task_fd_get(fd)) return -1;
+    current->fd_used[fd] = 0;
+    memset(&current->files[fd], 0, sizeof(current->files[fd]));
+    return 0;
 }
