@@ -5,7 +5,10 @@ BUILD := build
 DIST := dist
 CACHE := .cache
 USER_APP := $(BUILD)/userland/app
+INITRAMFS := $(BUILD)/initramfs.tar
+INITRAMFS_ROOT := $(BUILD)/initramfs_root
 USER_BASE := 0x400000
+ROOTFS_FILES := $(shell find userland/rootfs -type f 2>/dev/null | sort)
 
 CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding -fno-stack-protector \
           -fno-pic -fno-pie -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2 \
@@ -33,6 +36,14 @@ $(USER_APP): userland/hello.c $(MUSL_CC)
 
 userland: $(USER_APP)
 
+$(INITRAMFS): $(USER_APP) $(ROOTFS_FILES)
+	rm -rf $(INITRAMFS_ROOT)
+	mkdir -p $(INITRAMFS_ROOT)/sbin $(INITRAMFS_ROOT)/bin
+	cp -R userland/rootfs/. $(INITRAMFS_ROOT)/
+	cp $(USER_APP) $(INITRAMFS_ROOT)/sbin/init
+	cp $(USER_APP) $(INITRAMFS_ROOT)/bin/init
+	tar --format=ustar --owner=0 --group=0 --numeric-owner -cf $@ -C $(INITRAMFS_ROOT) .
+
 $(BUILD)/kernel/%.o: kernel/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -50,10 +61,11 @@ $(BUILD)/kernel.elf: $(KERNEL_O) kernel/linker.ld
 
 kernel: $(BUILD)/kernel.elf
 
-iso: $(BUILD)/kernel.elf $(LIMINE_TOOL)
+iso: $(BUILD)/kernel.elf $(INITRAMFS) $(LIMINE_TOOL)
 	rm -rf $(BUILD)/iso_root $(DIST)
 	mkdir -p $(BUILD)/iso_root/boot/limine $(BUILD)/iso_root/EFI/BOOT $(DIST)
 	cp $(BUILD)/kernel.elf $(BUILD)/iso_root/boot/kernel.elf
+	cp $(INITRAMFS) $(BUILD)/iso_root/boot/initramfs.tar
 	cp limine.conf $(BUILD)/iso_root/boot/limine/limine.conf
 	cp $(LIMINE_SRC)/limine-bios.sys $(LIMINE_SRC)/limine-bios-cd.bin $(LIMINE_SRC)/limine-uefi-cd.bin $(BUILD)/iso_root/boot/limine/
 	cp $(LIMINE_SRC)/BOOTX64.EFI $(BUILD)/iso_root/EFI/BOOT/

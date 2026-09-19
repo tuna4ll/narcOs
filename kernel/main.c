@@ -37,6 +37,13 @@ static volatile struct limine_framebuffer_request framebuffer_request = {
     .response = 0,
 };
 
+__attribute__((used, section(".limine_requests")))
+static volatile struct limine_module_request module_request = {
+    .id = LIMINE_MODULE_REQUEST_ID,
+    .revision = 0,
+    .response = 0,
+};
+
 __attribute__((used, section(".limine_requests_end")))
 static volatile uint64_t requests_end[] = LIMINE_REQUESTS_END_MARKER;
 
@@ -47,7 +54,8 @@ void _start(void) {
     serial_init();
 
     if (!LIMINE_BASE_REVISION_SUPPORTED(base_revision) ||
-        !memmap_request.response || !hhdm_request.response || !framebuffer_request.response) {
+        !memmap_request.response || !hhdm_request.response || !framebuffer_request.response ||
+        !module_request.response || module_request.response->module_count != 1) {
         serial_puts("[panic] required Limine features unavailable\n");
         for (;;) __asm__ volatile ("hlt");
     }
