@@ -133,13 +133,15 @@ void task_set_mmap_next(uint64_t value) {
 }
 
 int task_fd_open(const char *path) {
+    struct file file;
+    if (vfs_open(path, &file) != 0) return -1;
     for (int fd = 3; fd < TASK_FD_MAX; fd++) {
         if (current->fd_used[fd]) continue;
-        if (vfs_open(path, &current->files[fd]) != 0) return -1;
+        current->files[fd] = file;
         current->fd_used[fd] = 1;
         return fd;
     }
-    return -1;
+    return -2;
 }
 
 struct file *task_fd_get(int fd) {
