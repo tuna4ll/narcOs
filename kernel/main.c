@@ -7,6 +7,7 @@
 #include <kernel/syscall.h>
 #include <kernel/timer.h>
 #include <kernel/user.h>
+#include <kernel/vfs.h>
 #include <kernel/console.h>
 #include <stdint.h>
 
@@ -65,6 +66,11 @@ void _start(void) {
         for (;;) __asm__ volatile ("cli; hlt");
     }
     console_puts("[boot] Limine framebuffer ready\n");
+    struct limine_file *initramfs = module_request.response->modules[0];
+    if (vfs_init(initramfs->address, initramfs->size) != 0) {
+        console_puts("[panic] invalid initramfs\n");
+        for (;;) __asm__ volatile ("cli; hlt");
+    }
 
     cpu_init();
     gdt_init((uint64_t)(uintptr_t)(kernel_stack + sizeof(kernel_stack)));
