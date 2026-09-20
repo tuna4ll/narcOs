@@ -1,10 +1,10 @@
 #include <kernel/console.h>
+#include <kernel/arch.h>
 #include <kernel/task.h>
 #include <kernel/string.h>
 #include <kernel/vfs.h>
 
 #define TASK_MAX 2
-#define IA32_FS_BASE 0xc0000100u
 #define USER_MMAP_BASE 0x0000100010000000ULL
 #define TASK_FD_MAX 16
 
@@ -15,7 +15,7 @@ struct task {
     struct task_frame frame;
     uint64_t fs_base;
     uint64_t mmap_next;
-    uint8_t fpu[512] __attribute__((aligned(16)));
+    uint8_t arch_state[ARCH_STATE_SIZE] __attribute__((aligned(16)));
     struct file files[TASK_FD_MAX];
     uint8_t fd_used[TASK_FD_MAX];
 };
@@ -24,11 +24,6 @@ static struct task tasks[TASK_MAX];
 static struct task *current;
 
 extern void task_enter(struct task_frame *frame) __attribute__((noreturn));
-
-static void set_fs(uint64_t value) {
-    __asm__ volatile ("wrmsr" : : "c"(IA32_FS_BASE), "a"((uint32_t)value),
-                      "d"((uint32_t)(value >> 32)));
-}
 
 static struct task *next_task(void) {
     size_t start = current ? (size_t)(current - tasks + 1) : 0;
@@ -42,12 +37,12 @@ static struct task *next_task(void) {
 static void switch_to(struct task *next, struct task_frame *frame) {
     if (current) {
         current->frame = *frame;
-        __asm__ volatile ("fxsave64 %0" : "=m"(current->fpu));
+        arch_task_state_save(current->arch_state);
     }
     current = next;
     vmm_space_activate(&current->space);
-    set_fs(current->fs_base);
-    __asm__ volatile ("fxrstor64 %0" : : "m"(current->fpu));
+    arch_set_tls(current->fs_base);
+    arch_task_state_restore(current->arch_state);
     *frame = current->frame;
 }
 
@@ -60,10 +55,8 @@ struct task *task_create(void) {
         task->pid = (int)i + 1;
         task->runnable = 1;
         task->mmap_next = USER_MMAP_BASE;
-        task->frame.cs = 0x23;
-        task->frame.ss = 0x1b;
-        task->frame.rflags = 0x202;
-        __asm__ volatile ("fninit; fxsave64 %0" : "=m"(task->fpu));
+        arch_task_frame_init(&task->frame);
+        arch_task_state_init(task->arch_state);
         return task;
     }
     return 0;
@@ -74,19 +67,18 @@ struct address_space *task_space(struct task *task) {
 }
 
 void task_set_entry(struct task *task, uint64_t rip, uint64_t rsp) {
-    task->frame.rip = rip;
-    task->frame.rsp = rsp;
+    arch_task_set_entry(&task->frame, rip, rsp);
 }
 
 void task_start(void) {
     current = next_task();
     if (!current) goto done;
     vmm_space_activate(&current->space);
-    set_fs(current->fs_base);
-    __asm__ volatile ("fxrstor64 %0" : : "m"(current->fpu));
+    arch_set_tls(current->fs_base);
+    arch_task_state_restore(current->arch_state);
     task_enter(&current->frame);
 done:
-    for (;;) __asm__ volatile ("cli; hlt");
+    arch_halt();
 }
 
 void task_yield(struct task_frame *frame) {
@@ -104,7 +96,7 @@ void task_exit(struct task_frame *frame) {
     struct task *next = next_task();
     if (!next) {
         console_puts("[kernel] userspace exited\n");
-        for (;;) __asm__ volatile ("cli; hlt");
+        arch_halt();
     }
     switch_to(next, frame);
     vmm_space_destroy(&old->space);
@@ -121,7 +113,7 @@ uint64_t task_fs_base(void) {
 
 void task_set_fs_base(uint64_t value) {
     current->fs_base = value;
-    set_fs(value);
+    arch_set_tls(value);
 }
 
 uint64_t task_mmap_next(void) {

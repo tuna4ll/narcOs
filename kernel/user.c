@@ -1,4 +1,5 @@
 #include <kernel/mm.h>
+#include <kernel/arch.h>
 #include <kernel/string.h>
 #include <kernel/task.h>
 #include <kernel/vfs.h>
@@ -13,7 +14,6 @@
 
 #define EI_NIDENT 16
 #define ET_EXEC 2
-#define EM_X86_64 62
 #define PT_LOAD 1
 #define PT_PHDR 6
 #define PF_W 2
@@ -67,7 +67,7 @@ static __attribute__((noreturn)) void user_panic(const char *msg) {
     console_puts("[panic] user loader: ");
     console_puts(msg);
     console_puts("\n");
-    for (;;) __asm__ volatile ("cli; hlt");
+    arch_halt();
 }
 
 static void user_copy_out(struct address_space *space, uint64_t dst, const void *src, size_t len) {
@@ -178,7 +178,7 @@ void user_start(void) {
 
     const struct elf64_ehdr *eh = (const struct elf64_ehdr *)blob;
     if (eh->ident[0] != 0x7f || eh->ident[1] != 'E' || eh->ident[2] != 'L' || eh->ident[3] != 'F' ||
-        eh->ident[4] != 2 || eh->ident[5] != 1 || eh->type != ET_EXEC || eh->machine != EM_X86_64 ||
+        eh->ident[4] != 2 || eh->ident[5] != 1 || eh->type != ET_EXEC || eh->machine != ARCH_ELF_MACHINE ||
         eh->phentsize != sizeof(struct elf64_phdr) || !eh->phnum) {
         user_panic("unsupported ELF64 executable");
     }

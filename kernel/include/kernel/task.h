@@ -1,12 +1,7 @@
 #pragma once
+#include <kernel/arch.h>
 #include <kernel/mm.h>
 #include <stdint.h>
-
-struct task_frame {
-    uint64_t r15, r14, r13, r12, rbp, rbx;
-    uint64_t rax, rdi, rsi, rdx, r10, r8, r9;
-    uint64_t rip, cs, rflags, rsp, ss;
-};
 
 struct task;
 struct file;

@@ -428,9 +428,9 @@ static long dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
 }
 
 void syscall_dispatch(struct task_frame *frame) {
-    uint64_t nr = frame->rax;
+    uint64_t nr = arch_syscall_number(frame);
     if (nr == SYS_SCHED_YIELD) {
-        frame->rax = 0;
+        arch_syscall_return(frame, 0);
         task_yield(frame);
         return;
     }
@@ -438,6 +438,8 @@ void syscall_dispatch(struct task_frame *frame) {
         task_exit(frame);
         return;
     }
-    frame->rax = (uint64_t)dispatch(nr, frame->rdi, frame->rsi, frame->rdx,
-                                    frame->r10, frame->r8, frame->r9);
+    arch_syscall_return(frame, (uint64_t)dispatch(nr, arch_syscall_arg(frame, 0),
+                        arch_syscall_arg(frame, 1), arch_syscall_arg(frame, 2),
+                        arch_syscall_arg(frame, 3), arch_syscall_arg(frame, 4),
+                        arch_syscall_arg(frame, 5)));
 }
