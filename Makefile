@@ -19,10 +19,9 @@ USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -static -fno-pie -no-pie \
                -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 -Wl,--build-id=none
 
 KERNEL_C := $(shell find kernel -name '*.c' | sort)
-KERNEL_S := $(filter-out kernel/user_blob.S,$(shell find kernel -name '*.S' | sort))
+KERNEL_S := $(shell find kernel -name '*.S' | sort)
 KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) \
-            $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S)) \
-            $(BUILD)/kernel/user_blob.o
+            $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S))
 
 .PHONY: all kernel userland iso run run-serial clean distclean
 all: iso
@@ -49,10 +48,6 @@ $(BUILD)/kernel/%.o: kernel/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD)/kernel/%.o: kernel/%.S
-	@mkdir -p $(dir $@)
-	$(CC) $(ASFLAGS) -c $< -o $@
-
-$(BUILD)/kernel/user_blob.o: kernel/user_blob.S $(USER_APP)
 	@mkdir -p $(dir $@)
 	$(CC) $(ASFLAGS) -c $< -o $@
 

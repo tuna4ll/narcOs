@@ -1,6 +1,7 @@
 #include <kernel/mm.h>
 #include <kernel/string.h>
 #include <kernel/task.h>
+#include <kernel/vfs.h>
 #include <kernel/console.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -53,9 +54,6 @@ struct __attribute__((packed)) elf64_phdr {
     uint64_t memsz;
     uint64_t align;
 };
-
-extern const unsigned char user_blob_start[];
-extern const unsigned char user_blob_end[];
 
 static uint64_t align_down(uint64_t x) {
     return x & ~(PAGE_SIZE - 1);
@@ -132,7 +130,7 @@ static uint64_t find_phdr_addr(const struct elf64_ehdr *eh, const struct elf64_p
 
 static uint64_t build_linux_stack(struct address_space *space,
                                   const struct elf64_ehdr *eh, uint64_t phdr_addr) {
-    static const char arg0[] = "hello";
+    static const char arg0[] = "/sbin/init";
     static const uint8_t random_bytes[16] = {
         0x54, 0x75, 0x72, 0x6b, 0x4f, 0x53, 0x64, 0x65,
         0x76, 0x2d, 0x6d, 0x75, 0x73, 0x6c, 0x21, 0x7f,
@@ -171,10 +169,14 @@ static uint64_t build_linux_stack(struct address_space *space,
 }
 
 void user_start(void) {
-    size_t blob_size = (size_t)(user_blob_end - user_blob_start);
+    struct file executable;
+    if (vfs_open("/sbin/init", &executable) != 0 || executable.node.type != VFS_REG)
+        user_panic("cannot open /sbin/init");
+    const uint8_t *blob = executable.node.data;
+    size_t blob_size = (size_t)executable.node.size;
     if (blob_size < sizeof(struct elf64_ehdr)) user_panic("ELF is truncated");
 
-    const struct elf64_ehdr *eh = (const struct elf64_ehdr *)user_blob_start;
+    const struct elf64_ehdr *eh = (const struct elf64_ehdr *)blob;
     if (eh->ident[0] != 0x7f || eh->ident[1] != 'E' || eh->ident[2] != 'L' || eh->ident[3] != 'F' ||
         eh->ident[4] != 2 || eh->ident[5] != 1 || eh->type != ET_EXEC || eh->machine != EM_X86_64 ||
         eh->phentsize != sizeof(struct elf64_phdr) || !eh->phnum) {
@@ -183,47 +185,43 @@ void user_start(void) {
 
     uint64_t ph_bytes = (uint64_t)eh->phnum * eh->phentsize;
     if (eh->phoff > blob_size || ph_bytes > blob_size - eh->phoff) user_panic("bad program headers");
-    const struct elf64_phdr *ph = (const struct elf64_phdr *)(user_blob_start + eh->phoff);
+    const struct elf64_phdr *ph = (const struct elf64_phdr *)(blob + eh->phoff);
 
     uint64_t phdr_addr = find_phdr_addr(eh, ph);
     if (!phdr_addr) user_panic("cannot locate runtime program headers");
 
-    for (size_t n = 0; n < 2; n++) {
-        struct task *task = task_create();
-        if (!task) user_panic("cannot create task");
-        struct address_space *space = task_space(task);
+    struct task *task = task_create();
+    if (!task) user_panic("cannot create task");
+    struct address_space *space = task_space(task);
 
-        for (uint16_t i = 0; i < eh->phnum; i++) {
-            if (ph[i].type != PT_LOAD) continue;
-            if (ph[i].filesz > ph[i].memsz || ph[i].offset > blob_size ||
-                ph[i].filesz > blob_size - ph[i].offset)
-                user_panic("invalid PT_LOAD");
-            if (ph[i].vaddr < USER_MIN || ph[i].vaddr >= USER_IMAGE_END ||
-                ph[i].memsz > USER_IMAGE_END - ph[i].vaddr)
-                user_panic("PT_LOAD outside userspace image window");
-            if (!ph[i].memsz) continue;
+    for (uint16_t i = 0; i < eh->phnum; i++) {
+        if (ph[i].type != PT_LOAD) continue;
+        if (ph[i].filesz > ph[i].memsz || ph[i].offset > blob_size ||
+            ph[i].filesz > blob_size - ph[i].offset)
+            user_panic("invalid PT_LOAD");
+        if (ph[i].vaddr < USER_MIN || ph[i].vaddr >= USER_IMAGE_END ||
+            ph[i].memsz > USER_IMAGE_END - ph[i].vaddr)
+            user_panic("PT_LOAD outside userspace image window");
+        if (!ph[i].memsz) continue;
 
-            map_range(space, ph[i].vaddr, ph[i].vaddr + ph[i].memsz);
-            user_copy_out(space, ph[i].vaddr, user_blob_start + ph[i].offset,
-                          (size_t)ph[i].filesz);
-            if (ph[i].memsz > ph[i].filesz)
-                user_zero(space, ph[i].vaddr + ph[i].filesz,
-                          (size_t)(ph[i].memsz - ph[i].filesz));
-        }
-
-        for (uint16_t i = 0; i < eh->phnum; i++) {
-            if (ph[i].type != PT_LOAD || !ph[i].memsz) continue;
-            for (uint64_t va = align_down(ph[i].vaddr);
-                 va < align_up(ph[i].vaddr + ph[i].memsz); va += PAGE_SIZE) {
-                if (vmm_protect_user(space, va, (ph[i].flags & PF_W) ? VMM_WRITE : 0) != 0)
-                    user_panic("failed to protect PT_LOAD");
-            }
-        }
-
-        uint64_t stack = build_linux_stack(space, eh, phdr_addr);
-        task_set_entry(task, eh->entry, stack);
+        map_range(space, ph[i].vaddr, ph[i].vaddr + ph[i].memsz);
+        user_copy_out(space, ph[i].vaddr, blob + ph[i].offset, (size_t)ph[i].filesz);
+        if (ph[i].memsz > ph[i].filesz)
+            user_zero(space, ph[i].vaddr + ph[i].filesz,
+                      (size_t)(ph[i].memsz - ph[i].filesz));
     }
 
+    for (uint16_t i = 0; i < eh->phnum; i++) {
+        if (ph[i].type != PT_LOAD || !ph[i].memsz) continue;
+        for (uint64_t va = align_down(ph[i].vaddr);
+             va < align_up(ph[i].vaddr + ph[i].memsz); va += PAGE_SIZE) {
+            if (vmm_protect_user(space, va, (ph[i].flags & PF_W) ? VMM_WRITE : 0) != 0)
+                user_panic("failed to protect PT_LOAD");
+        }
+    }
+
+    uint64_t stack = build_linux_stack(space, eh, phdr_addr);
+    task_set_entry(task, eh->entry, stack);
     console_puts("[user] entering ring 3\n");
     task_start();
 }
