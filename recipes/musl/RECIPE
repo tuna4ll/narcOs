@@ -7,6 +7,8 @@ MUSL_PREPARED := $(MUSL_SRC)/.prepared
 MUSL_OBJ := $(BUILD)/musl/obj
 MUSL_SYSROOT := $(abspath $(BUILD)/musl/sysroot)
 MUSL_CC := $(MUSL_SYSROOT)/bin/musl-gcc
+MUSL_AR ?= ar
+MUSL_RANLIB ?= ranlib
 MUSL_PATCHES := $(sort $(wildcard recipes/musl/patches/*.patch))
 
 $(MUSL_ARCHIVE):
@@ -24,7 +26,8 @@ $(MUSL_PREPARED): $(MUSL_ARCHIVE) $(MUSL_PATCHES)
 $(MUSL_CC): $(MUSL_PREPARED)
 	rm -rf $(MUSL_OBJ) $(MUSL_SYSROOT)
 	mkdir -p $(MUSL_OBJ)
-	cd $(MUSL_OBJ) && CC='$(CC)' CFLAGS='-O2 -march=x86-64 -mtune=generic' \
+	cd $(MUSL_OBJ) && CC='$(MUSL_BUILD_CC)' AR='$(MUSL_AR)' RANLIB='$(MUSL_RANLIB)' \
+		CFLAGS='$(MUSL_CFLAGS)' \
 		$(abspath $(MUSL_SRC))/configure --prefix='$(MUSL_SYSROOT)' \
 		--syslibdir='$(MUSL_SYSROOT)/lib' --disable-shared --enable-wrapper=gcc
 	$(MAKE) -C $(MUSL_OBJ) -j$$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
