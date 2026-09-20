@@ -29,7 +29,7 @@ all: iso
 include recipes/musl/RECIPE
 include recipes/limine/RECIPE
 
-$(USER_APP): userland/hello.c $(MUSL_CC)
+$(USER_APP): userland/init.c $(MUSL_CC)
 	@mkdir -p $(dir $@)
 	$(MUSL_CC) $(USER_CFLAGS) $< -o $@
 
