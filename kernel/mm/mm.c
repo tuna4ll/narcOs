@@ -1,11 +1,13 @@
 #include <kernel/mm.h>
 #include <kernel/string.h>
 
+#if defined(__x86_64__)
 #define PTE_PRESENT (1ULL << 0)
 #define PTE_WRITE   (1ULL << 1)
 #define PTE_USER    (1ULL << 2)
 #define PTE_HUGE    (1ULL << 7)
 #define ADDR_MASK   0x000ffffffffff000ULL
+#endif
 
 static struct limine_memmap_response *memmap;
 static uint64_t hhdm;
@@ -13,7 +15,9 @@ static uint64_t region_index;
 static uint64_t next_phys;
 static uint64_t region_end;
 static uint64_t free_head;
+#if defined(__x86_64__)
 static struct address_space *current_space;
+#endif
 
 static uint64_t align_up(uint64_t x, uint64_t a) {
     return (x + a - 1) & ~(a - 1);
@@ -66,6 +70,7 @@ void pmm_free_page(uint64_t phys) {
     free_head = phys;
 }
 
+#if defined(__x86_64__)
 static uint64_t read_cr3(void) {
     uint64_t value;
     __asm__ volatile ("mov %%cr3, %0" : "=r"(value));
@@ -209,3 +214,4 @@ int vmm_user_range_ok(struct address_space *space, uint64_t virt, uint64_t len, 
     }
     return 1;
 }
+#endif

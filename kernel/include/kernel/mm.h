@@ -5,6 +5,7 @@
 
 #define PAGE_SIZE 4096ULL
 #define VMM_WRITE (1ULL << 1)
+#define VMM_DEVICE (1ULL << 2)
 
 struct address_space {
     uint64_t root;

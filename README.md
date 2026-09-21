@@ -1,10 +1,9 @@
 # narcOs
 
-A small x86_64 hobby OS with isolated userspace, preemptive scheduling, musl and a read-only initramfs.
+A small POSIX-like hobby OS for x86_64, AArch64 and RISC-V 64.
 
 ```sh
-sudo apt install build-essential curl xorriso qemu-system-x86
-make run
+make ARCH=x86_64 run
 ```
 
-Use `make run-serial` for serial output.
+Use `aarch64` or `riscv64` to target another architecture.

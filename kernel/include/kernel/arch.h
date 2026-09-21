@@ -15,14 +15,14 @@ struct task_frame {
     uint64_t x[31];
     uint64_t sp, pc, pstate;
 };
-#define ARCH_STATE_SIZE 528
+#define ARCH_STATE_SIZE 536
 #define ARCH_ELF_MACHINE 183
 #elif defined(__riscv)
 struct task_frame {
     uint64_t x[32];
     uint64_t pc, status;
 };
-#define ARCH_STATE_SIZE 16
+#define ARCH_STATE_SIZE 264
 #define ARCH_ELF_MACHINE 243
 #else
 #error Unsupported architecture

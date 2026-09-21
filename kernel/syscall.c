@@ -7,6 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(__x86_64__)
 #define SYS_READ               0
 #define SYS_WRITE              1
 #define SYS_OPEN               2
@@ -31,6 +32,29 @@
 #define SYS_OPENAT           257
 #define SYS_NEWFSTATAT       262
 #define SYS_GETDENTS64       217
+#else
+#define SYS_FCNTL             25
+#define SYS_IOCTL             29
+#define SYS_OPENAT            56
+#define SYS_CLOSE             57
+#define SYS_GETDENTS64        61
+#define SYS_LSEEK             62
+#define SYS_READ              63
+#define SYS_WRITE             64
+#define SYS_WRITEV            66
+#define SYS_NEWFSTATAT        79
+#define SYS_FSTAT             80
+#define SYS_EXIT              93
+#define SYS_EXIT_GROUP        94
+#define SYS_SET_TID_ADDRESS   96
+#define SYS_SCHED_YIELD      124
+#define SYS_GETPID           172
+#define SYS_BRK              214
+#define SYS_MUNMAP           215
+#define SYS_MMAP             222
+#define SYS_MPROTECT         226
+#define SYS_MADVISE          233
+#endif
 
 #define EBADF   9
 #define ENOENT  2
@@ -58,8 +82,8 @@
 #define AT_EMPTY_PATH        0x1000
 #define F_GETFD              1
 #define F_SETFD              2
-#define USER_MMAP_BASE 0x0000100010000000ULL
-#define USER_MMAP_END  0x0000100040000000ULL
+#define USER_MMAP_BASE 0x0000000100000000ULL
+#define USER_MMAP_END  0x0000000140000000ULL
 
 struct iovec64 {
     uint64_t base;
@@ -73,7 +97,8 @@ struct winsize64 {
     uint16_t ypixel;
 };
 
-struct stat64 {
+#if defined(__x86_64__)
+struct kernel_stat {
     uint64_t dev;
     uint64_t ino;
     uint64_t nlink;
@@ -88,6 +113,24 @@ struct stat64 {
     int64_t times[6];
     int64_t unused[3];
 };
+#else
+struct kernel_stat {
+    uint64_t dev;
+    uint64_t ino;
+    uint32_t mode;
+    uint32_t nlink;
+    uint32_t uid;
+    uint32_t gid;
+    uint64_t rdev;
+    uint64_t pad1;
+    int64_t size;
+    int32_t blksize;
+    int32_t pad2;
+    int64_t blocks;
+    int64_t times[6];
+    uint32_t unused[2];
+};
+#endif
 
 static uint64_t align_up(uint64_t value) {
     if (value > UINT64_MAX - (PAGE_SIZE - 1)) return 0;
@@ -202,7 +245,7 @@ static long sys_open_file(int64_t dirfd, uint64_t path_addr, uint64_t flags) {
     return fd;
 }
 
-static void make_stat(const struct vnode *node, struct stat64 *st) {
+static void make_stat(const struct vnode *node, struct kernel_stat *st) {
     memset(st, 0, sizeof(*st));
     st->dev = 1;
     st->ino = node->ino;
@@ -214,7 +257,7 @@ static void make_stat(const struct vnode *node, struct stat64 *st) {
 }
 
 static long put_stat(const struct vnode *node, uint64_t addr) {
-    struct stat64 st;
+    struct kernel_stat st;
     make_stat(node, &st);
     return copy_to_user(addr, &st, sizeof(st)) == 0 ? 0 : -EFAULT;
 }
@@ -228,6 +271,7 @@ static long sys_fstat(uint64_t fd, uint64_t addr) {
     return file ? put_stat(&file->node, addr) : -EBADF;
 }
 
+#if defined(__x86_64__)
 static long sys_stat(uint64_t path_addr, uint64_t addr) {
     char path[VFS_PATH_MAX];
     struct file file;
@@ -235,6 +279,7 @@ static long sys_stat(uint64_t path_addr, uint64_t addr) {
     if (vfs_open(path, &file) != 0) return -ENOENT;
     return put_stat(&file.node, addr);
 }
+#endif
 
 static long sys_fstatat(int64_t dirfd, uint64_t path_addr, uint64_t addr, uint64_t flags) {
     char path[VFS_PATH_MAX];
@@ -383,6 +428,7 @@ static long sys_ioctl(uint64_t fd, uint64_t request, uint64_t arg) {
     return copy_to_user(arg, &ws, sizeof(ws)) == 0 ? 0 : -EFAULT;
 }
 
+#if defined(__x86_64__)
 static long sys_arch_prctl(uint64_t code, uint64_t addr) {
     if (code == ARCH_SET_FS) {
         if (addr > 0x00007fffffffffffULL) return -EINVAL;
@@ -395,6 +441,7 @@ static long sys_arch_prctl(uint64_t code, uint64_t addr) {
     }
     return -EINVAL;
 }
+#endif
 
 static long dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
                      uint64_t a4, uint64_t a5, uint64_t a6) {
@@ -403,9 +450,13 @@ static long dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
     switch (nr) {
     case SYS_READ:            return sys_read(a1, a2, a3);
     case SYS_WRITE:           return sys_write(a1, a2, a3);
+#if defined(__x86_64__)
     case SYS_OPEN:            return sys_open_file(AT_FDCWD, a1, a2);
+#endif
     case SYS_CLOSE:           return sys_close(a1);
+#if defined(__x86_64__)
     case SYS_STAT:            return sys_stat(a1, a2);
+#endif
     case SYS_FSTAT:           return sys_fstat(a1, a2);
     case SYS_LSEEK:           return sys_lseek(a1, (int64_t)a2, a3);
     case SYS_MMAP:            return sys_mmap(a1, a2, a3, a4, a5);
@@ -417,7 +468,9 @@ static long dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
     case SYS_MADVISE:         return 0;
     case SYS_GETPID:          return task_pid();
     case SYS_FCNTL:           return sys_fcntl(a1, a2);
+#if defined(__x86_64__)
     case SYS_ARCH_PRCTL:      return sys_arch_prctl(a1, a2);
+#endif
     case SYS_SET_TID_ADDRESS: return task_pid();
     case SYS_GETDENTS64:      return sys_getdents(a1, a2, a3);
     case SYS_OPENAT:          return sys_open_file((int64_t)a1, a2, a3);

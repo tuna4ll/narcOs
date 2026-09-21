@@ -11,8 +11,8 @@ ROOTFS_FILES := $(shell find userland/rootfs -type f 2>/dev/null | sort)
 
 COMMON_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding \
                  -fno-stack-protector -fno-pic -fno-pie -I kernel/include
-COMMON_USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -static -fno-pie -no-pie \
-                      -Wl,-Ttext-segment=$(USER_BASE) -Wl,-z,max-page-size=0x1000 \
+COMMON_USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -static -fno-pie \
+                      -Wl,-z,max-page-size=0x1000 \
                       -Wl,--build-id=none
 
 ifeq ($(ARCH),x86_64)
@@ -21,6 +21,7 @@ KLD := ld
 KERNEL_CFLAGS := -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2
 KERNEL_ASFLAGS := -m64 -mno-red-zone -mcmodel=kernel
 USER_ARCH_FLAGS := -march=x86-64 -mtune=generic
+USER_LINK_FLAGS := -no-pie -Wl,-Ttext-segment=$(USER_BASE)
 MUSL_BUILD_CC := cc
 MUSL_CFLAGS := -O2 -march=x86-64 -mtune=generic
 EFI_BOOT := BOOTX64.EFI
@@ -30,20 +31,22 @@ KCC := aarch64-linux-gnu-gcc
 KLD := aarch64-linux-gnu-ld
 KERNEL_CFLAGS := -mgeneral-regs-only -mstrict-align
 KERNEL_ASFLAGS :=
-USER_ARCH_FLAGS := -march=armv8-a
+USER_ARCH_FLAGS := -march=armv8-a -fno-link-libatomic
+USER_LINK_FLAGS := -no-pie -Wl,-Ttext-segment=$(USER_BASE)
 MUSL_BUILD_CC := aarch64-linux-gnu-gcc
 MUSL_CFLAGS := -O2 -march=armv8-a
 EFI_BOOT := BOOTAA64.EFI
 else ifeq ($(ARCH),riscv64)
-KCC := clang --target=riscv64-linux-musl
-KLD := ld.lld
-KERNEL_CFLAGS := -march=rv64imac -mabi=lp64 -mcmodel=medany -mno-relax
-KERNEL_ASFLAGS := -march=rv64imac -mabi=lp64 -mcmodel=medany -mno-relax
-USER_ARCH_FLAGS := -march=rv64imac -mabi=lp64
-MUSL_BUILD_CC := clang --target=riscv64-linux-musl
-MUSL_CFLAGS := -O2 -march=rv64imac -mabi=lp64
-MUSL_AR := llvm-ar
-MUSL_RANLIB := llvm-ranlib
+KCC := riscv64-linux-gnu-gcc
+KLD := riscv64-linux-gnu-ld
+KERNEL_CFLAGS := -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany -mno-relax -msmall-data-limit=0
+KERNEL_ASFLAGS := -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany -mno-relax -msmall-data-limit=0
+USER_ARCH_FLAGS := -march=rv64gc_zicsr_zifencei -mabi=lp64d -fno-link-libatomic
+USER_LINK_FLAGS := -no-pie -Wl,-Ttext-segment=$(USER_BASE)
+MUSL_BUILD_CC := riscv64-linux-gnu-gcc
+MUSL_CFLAGS := -O2 -march=rv64gc_zicsr_zifencei -mabi=lp64d
+MUSL_AR := riscv64-linux-gnu-ar
+MUSL_RANLIB := riscv64-linux-gnu-ranlib
 EFI_BOOT := BOOTRISCV64.EFI
 else
 $(error unsupported ARCH: $(ARCH))
@@ -51,7 +54,7 @@ endif
 
 CFLAGS := $(COMMON_CFLAGS) $(KERNEL_CFLAGS)
 ASFLAGS := -ffreestanding -fno-pic -fno-pie $(KERNEL_ASFLAGS)
-USER_CFLAGS := $(COMMON_USER_CFLAGS) $(USER_ARCH_FLAGS)
+USER_CFLAGS := $(COMMON_USER_CFLAGS) $(USER_ARCH_FLAGS) $(USER_LINK_FLAGS)
 LINKER := kernel/arch/$(ARCH)/linker.ld
 
 COMMON_KERNEL_C := $(shell find kernel -path kernel/arch -prune -o -name '*.c' -print | sort)
@@ -123,7 +126,10 @@ run run-serial: iso
 		-monitor none -no-reboot -no-shutdown
 else
 run run-serial: iso
+	cp /usr/share/edk2/riscv64/RISCV_VIRT_VARS.fd $(BUILD)/RISCV_VIRT_VARS.fd
 	qemu-system-riscv64 -M virt -cpu rv64 -m 256M -device ramfb \
+		-drive if=pflash,unit=0,format=raw,file=/usr/share/edk2/riscv64/RISCV_VIRT_CODE.fd,readonly=on \
+		-drive if=pflash,unit=1,format=raw,file=$(BUILD)/RISCV_VIRT_VARS.fd \
 		-cdrom $(DIST)/narcOs-$(ARCH).iso -serial $(if $(filter run-serial,$@),stdio,none) \
 		-monitor none -no-reboot -no-shutdown
 endif
