@@ -39,3 +39,4 @@ void arch_task_state_restore(const void *state);
 uint64_t arch_syscall_number(const struct task_frame *frame);
 uint64_t arch_syscall_arg(const struct task_frame *frame, unsigned index);
 void arch_syscall_return(struct task_frame *frame, uint64_t value);
+void arch_syscall_return2(struct task_frame *frame, uint64_t value, uint64_t status);

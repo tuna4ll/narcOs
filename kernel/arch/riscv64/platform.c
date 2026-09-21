@@ -61,6 +61,11 @@ void arch_syscall_return(struct task_frame *frame, uint64_t value) {
     frame->x[10] = value;
 }
 
+void arch_syscall_return2(struct task_frame *frame, uint64_t value, uint64_t status) {
+    frame->x[10] = value;
+    frame->x[11] = status;
+}
+
 void riscv_trap(struct task_frame *frame) {
     uint64_t cause;
     __asm__ volatile ("csrr %0, scause" : "=r"(cause));

@@ -62,3 +62,8 @@ uint64_t arch_syscall_arg(const struct task_frame *frame, unsigned index) {
 void arch_syscall_return(struct task_frame *frame, uint64_t value) {
     frame->rax = value;
 }
+
+void arch_syscall_return2(struct task_frame *frame, uint64_t value, uint64_t status) {
+    frame->rax = value;
+    frame->rdx = status;
+}

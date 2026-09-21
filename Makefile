@@ -10,10 +10,12 @@ USER_BASE := 0x400000
 ROOTFS_FILES := $(shell find userland/rootfs -type f 2>/dev/null | sort)
 
 COMMON_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding \
-                 -fno-stack-protector -fno-pic -fno-pie -I kernel/include
+                 -fno-stack-protector -fno-pic -fno-pie -I kernel/include -I include
 COMMON_USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -static -fno-pie \
                       -Wl,-z,max-page-size=0x1000 \
                       -Wl,--build-id=none
+LIBNARC_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
+                  -fno-stack-protector -I include
 
 ifeq ($(ARCH),x86_64)
 KCC := cc
@@ -56,6 +58,8 @@ CFLAGS := $(COMMON_CFLAGS) $(KERNEL_CFLAGS)
 ASFLAGS := -ffreestanding -fno-pic -fno-pie $(KERNEL_ASFLAGS)
 USER_CFLAGS := $(COMMON_USER_CFLAGS) $(USER_ARCH_FLAGS) $(USER_LINK_FLAGS)
 LINKER := kernel/arch/$(ARCH)/linker.ld
+LIBNARC_OBJ := $(BUILD)/lib/libnarc/narc.o
+LIBNARC := $(BUILD)/lib/libnarc.a
 
 COMMON_KERNEL_C := $(shell find kernel -path kernel/arch -prune -o -name '*.c' -print | sort)
 COMMON_KERNEL_S := $(shell find kernel -path kernel/arch -prune -o -name '*.S' -print | sort)
@@ -66,16 +70,26 @@ KERNEL_S := $(COMMON_KERNEL_S) $(ARCH_KERNEL_S)
 KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) \
             $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S))
 
-.PHONY: all kernel userland iso run run-serial clean distclean
+.PHONY: all kernel libnarc userland iso run run-serial clean distclean
 all: iso
 
 include recipes/musl/RECIPE
 include recipes/limine/RECIPE
 include recipes/edk2/RECIPE
 
-$(USER_APP): userland/init.c $(MUSL_CC)
+$(LIBNARC_OBJ): lib/libnarc/narc.c include/narcos/abi.h include/narcos/narc.h
 	@mkdir -p $(dir $@)
-	$(MUSL_CC) $(USER_CFLAGS) $< -o $@
+	$(MUSL_BUILD_CC) $(LIBNARC_CFLAGS) $(USER_ARCH_FLAGS) -c $< -o $@
+
+$(LIBNARC): $(LIBNARC_OBJ)
+	@mkdir -p $(dir $@)
+	$(MUSL_AR) rcs $@ $^
+
+libnarc: $(LIBNARC)
+
+$(USER_APP): userland/init.c $(MUSL_CC) $(LIBNARC)
+	@mkdir -p $(dir $@)
+	$(MUSL_CC) $(USER_CFLAGS) -I include $< $(LIBNARC) -o $@
 
 userland: $(USER_APP)
 

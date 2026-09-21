@@ -100,6 +100,11 @@ void arch_syscall_return(struct task_frame *frame, uint64_t value) {
     frame->x[0] = value;
 }
 
+void arch_syscall_return2(struct task_frame *frame, uint64_t value, uint64_t status) {
+    frame->x[0] = value;
+    frame->x[1] = status;
+}
+
 void aarch64_sync(struct task_frame *frame) {
     uint64_t esr, far;
     if (current_el() == 2) __asm__ volatile ("mrs %0, esr_el2; mrs %1, far_el2" : "=r"(esr), "=r"(far));

@@ -5,6 +5,7 @@
 #include <kernel/user.h>
 #include <kernel/string.h>
 #include <kernel/vfs.h>
+#include <narcos/abi.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -528,6 +529,97 @@ static long sys_arch_prctl(uint64_t code, uint64_t addr) {
 }
 #endif
 
+static uint32_t native_status_from_result(long result) {
+    if (result >= 0) return NARC_OK;
+    switch (-result) {
+    case EINVAL:  return NARC_INVALID_ARGUMENT;
+    case EBADF:   return NARC_BAD_HANDLE;
+    case ENOENT:  return NARC_NOT_FOUND;
+    case EIO:     return NARC_IO_ERROR;
+    case EFAULT:  return NARC_BAD_ADDRESS;
+    case ENOMEM:  return NARC_NO_MEMORY;
+    case EMFILE:  return NARC_TOO_MANY_HANDLES;
+    case ENOTTY:  return NARC_NOT_A_TTY;
+    case EISDIR:  return NARC_IS_DIRECTORY;
+    case ENOTDIR: return NARC_NOT_DIRECTORY;
+    case EROFS:   return NARC_READ_ONLY;
+    case ENOSYS:  return NARC_NOT_SUPPORTED;
+    case ECHILD:  return NARC_NO_CHILD;
+    case EAGAIN:  return NARC_TRY_AGAIN;
+    default:      return NARC_IO_ERROR;
+    }
+}
+
+static void native_return(struct task_frame *frame, long result) {
+    uint32_t status = native_status_from_result(result);
+    arch_syscall_return2(frame, status == NARC_OK ? (uint64_t)result : 0, status);
+}
+
+static long native_open(uint64_t path_addr, uint64_t path_length, uint64_t flags) {
+    const uint64_t known_flags = NARC_OPEN_READ | NARC_OPEN_WRITE |
+                                 NARC_OPEN_CREATE | NARC_OPEN_DIRECTORY;
+    if (!path_length || path_length >= VFS_PATH_MAX || (flags & ~known_flags) ||
+        !(flags & NARC_OPEN_READ)) return -EINVAL;
+    if (flags & (NARC_OPEN_WRITE | NARC_OPEN_CREATE)) return -EROFS;
+
+    char path[VFS_PATH_MAX];
+    if (copy_from_user(path, path_addr, (size_t)path_length) != 0) return -EFAULT;
+    for (uint64_t i = 0; i < path_length; i++)
+        if (!path[i]) return -EINVAL;
+    path[path_length] = 0;
+    if (path[0] != '/') return -ENOENT;
+
+    int fd = task_fd_open(path);
+    if (fd == -1) return -ENOENT;
+    if (fd == -2) return -EMFILE;
+    struct file *file = task_fd_file(fd);
+    if ((flags & NARC_OPEN_DIRECTORY) && file->node.type != VFS_DIR) {
+        task_fd_close(fd);
+        return -ENOTDIR;
+    }
+    return fd;
+}
+
+static void native_dispatch(struct task_frame *frame, uint64_t id) {
+    uint64_t a1 = arch_syscall_arg(frame, 0);
+    uint64_t a2 = arch_syscall_arg(frame, 1);
+    uint64_t a3 = arch_syscall_arg(frame, 2);
+
+    switch (id) {
+    case NARC_SYS_ABI_QUERY:
+        arch_syscall_return2(frame, NARC_ABI_VERSION, NARC_OK);
+        return;
+    case NARC_SYS_EXIT:
+        task_exit(frame, (int)a1);
+        return;
+    case NARC_SYS_GETPID:
+        native_return(frame, task_pid());
+        return;
+    case NARC_SYS_YIELD:
+        arch_syscall_return2(frame, 0, NARC_OK);
+        task_yield(frame);
+        return;
+    case NARC_SYS_OPEN:
+        native_return(frame, native_open(a1, a2, a3));
+        return;
+    case NARC_SYS_CLOSE:
+        native_return(frame, sys_close(a1));
+        return;
+    case NARC_SYS_READ:
+        native_return(frame, sys_read(a1, a2, a3));
+        return;
+    case NARC_SYS_WRITE:
+        native_return(frame, sys_write(a1, a2, a3));
+        return;
+    case NARC_SYS_SEEK:
+        native_return(frame, sys_lseek(a1, (int64_t)a2, a3));
+        return;
+    default:
+        arch_syscall_return2(frame, 0, NARC_NOT_SUPPORTED);
+        return;
+    }
+}
+
 static long dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
                      uint64_t a4, uint64_t a5, uint64_t a6) {
     (void)a6;
@@ -575,6 +667,10 @@ static long dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
 
 void syscall_dispatch(struct task_frame *frame) {
     uint64_t nr = arch_syscall_number(frame);
+    if ((nr & NARC_SYSCALL_TAG_MASK) == NARC_SYSCALL_TAG) {
+        native_dispatch(frame, nr & NARC_SYSCALL_ID_MASK);
+        return;
+    }
     uint64_t a1 = arch_syscall_arg(frame, 0);
     uint64_t a2 = arch_syscall_arg(frame, 1);
     uint64_t a3 = arch_syscall_arg(frame, 2);
