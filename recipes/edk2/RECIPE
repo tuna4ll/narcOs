@@ -1,0 +1,16 @@
+EDK2_VERSION := 20260821T130731Z
+EDK2_SHA256 := 5523ed2edc54b22442209a1e58172154827d7ca73b0e968551d583a2ea7988d6
+EDK2_URL := https://github.com/osdev0/edk2-ovmf-stable-bins/releases/download/$(EDK2_VERSION)/edk2-ovmf-bins.tar.gz
+EDK2_ARCHIVE := $(CACHE)/sources/edk2-ovmf-bins-$(EDK2_VERSION).tar.gz
+EDK2_DIR := $(CACHE)/edk2-ovmf-bins
+EDK2_PREPARED := $(EDK2_DIR)/.prepared
+
+$(EDK2_ARCHIVE):
+	@mkdir -p $(dir $@)
+	curl -fL --retry 3 "$(EDK2_URL)" -o $@
+
+$(EDK2_PREPARED): $(EDK2_ARCHIVE)
+	@printf '%s  %s\n' '$(EDK2_SHA256)' '$<' | sha256sum -c -
+	rm -rf $(EDK2_DIR)
+	tar -xzf $< -C $(CACHE)
+	@touch $@

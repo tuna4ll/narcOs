@@ -71,6 +71,7 @@ all: iso
 
 include recipes/musl/RECIPE
 include recipes/limine/RECIPE
+include recipes/edk2/RECIPE
 
 $(USER_APP): userland/init.c $(MUSL_CC)
 	@mkdir -p $(dir $@)
@@ -119,17 +120,19 @@ run run-serial: iso
 	qemu-system-x86_64 -M q35 -m 256M -vga std -cdrom $(DIST)/narcOs-$(ARCH).iso \
 		-serial $(if $(filter run-serial,$@),stdio,none) -monitor none -no-reboot -no-shutdown
 else ifeq ($(ARCH),aarch64)
-run run-serial: iso
+run run-serial: iso $(EDK2_PREPARED)
+	cp $(EDK2_DIR)/ovmf-vars-aarch64.fd $(BUILD)/ovmf-vars.fd
 	qemu-system-aarch64 -M virt -cpu cortex-a72 -m 256M -device ramfb \
-		-drive if=pflash,unit=0,format=raw,file=/usr/share/edk2/aarch64/QEMU_EFI.fd,readonly=on \
+		-drive if=pflash,unit=0,format=raw,file=$(EDK2_DIR)/ovmf-code-aarch64.fd,readonly=on \
+		-drive if=pflash,unit=1,format=raw,file=$(BUILD)/ovmf-vars.fd \
 		-cdrom $(DIST)/narcOs-$(ARCH).iso -serial $(if $(filter run-serial,$@),stdio,none) \
 		-monitor none -no-reboot -no-shutdown
 else
-run run-serial: iso
-	cp /usr/share/edk2/riscv64/RISCV_VIRT_VARS.fd $(BUILD)/RISCV_VIRT_VARS.fd
+run run-serial: iso $(EDK2_PREPARED)
+	cp $(EDK2_DIR)/ovmf-vars-riscv64.fd $(BUILD)/ovmf-vars.fd
 	qemu-system-riscv64 -M virt -cpu rv64 -m 256M -device ramfb \
-		-drive if=pflash,unit=0,format=raw,file=/usr/share/edk2/riscv64/RISCV_VIRT_CODE.fd,readonly=on \
-		-drive if=pflash,unit=1,format=raw,file=$(BUILD)/RISCV_VIRT_VARS.fd \
+		-drive if=pflash,unit=0,format=raw,file=$(EDK2_DIR)/ovmf-code-riscv64.fd,readonly=on \
+		-drive if=pflash,unit=1,format=raw,file=$(BUILD)/ovmf-vars.fd \
 		-cdrom $(DIST)/narcOs-$(ARCH).iso -serial $(if $(filter run-serial,$@),stdio,none) \
 		-monitor none -no-reboot -no-shutdown
 endif
