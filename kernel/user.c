@@ -1,9 +1,10 @@
-#include <kernel/mm.h>
 #include <kernel/arch.h>
+#include <kernel/console.h>
+#include <kernel/mm.h>
 #include <kernel/string.h>
 #include <kernel/task.h>
+#include <kernel/user.h>
 #include <kernel/vfs.h>
-#include <kernel/console.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -11,70 +12,42 @@
 #define USER_IMAGE_END  0x0000000010000000ULL
 #define USER_STACK_TOP  0x0000000080000000ULL
 #define USER_STACK_SIZE (64ULL * 1024ULL)
-
 #define EI_NIDENT 16
 #define ET_EXEC 2
 #define PT_LOAD 1
 #define PT_PHDR 6
 #define PF_W 2
-
-#define AT_NULL   0
-#define AT_PHDR   3
-#define AT_PHENT  4
-#define AT_PHNUM  5
+#define AT_NULL 0
+#define AT_PHDR 3
+#define AT_PHENT 4
+#define AT_PHNUM 5
 #define AT_PAGESZ 6
-#define AT_ENTRY  9
+#define AT_ENTRY 9
 #define AT_RANDOM 25
 #define AT_EXECFN 31
 
 struct __attribute__((packed)) elf64_ehdr {
     unsigned char ident[EI_NIDENT];
-    uint16_t type;
-    uint16_t machine;
+    uint16_t type, machine;
     uint32_t version;
-    uint64_t entry;
-    uint64_t phoff;
-    uint64_t shoff;
+    uint64_t entry, phoff, shoff;
     uint32_t flags;
-    uint16_t ehsize;
-    uint16_t phentsize;
-    uint16_t phnum;
-    uint16_t shentsize;
-    uint16_t shnum;
-    uint16_t shstrndx;
+    uint16_t ehsize, phentsize, phnum, shentsize, shnum, shstrndx;
 };
 
 struct __attribute__((packed)) elf64_phdr {
-    uint32_t type;
-    uint32_t flags;
-    uint64_t offset;
-    uint64_t vaddr;
-    uint64_t paddr;
-    uint64_t filesz;
-    uint64_t memsz;
-    uint64_t align;
+    uint32_t type, flags;
+    uint64_t offset, vaddr, paddr, filesz, memsz, align;
 };
 
-static uint64_t align_down(uint64_t x) {
-    return x & ~(PAGE_SIZE - 1);
-}
+static uint64_t align_down(uint64_t x) { return x & ~(PAGE_SIZE - 1); }
+static uint64_t align_up(uint64_t x) { return (x + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1); }
 
-static uint64_t align_up(uint64_t x) {
-    return (x + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-}
-
-static __attribute__((noreturn)) void user_panic(const char *msg) {
-    console_puts("[panic] user loader: ");
-    console_puts(msg);
-    console_puts("\n");
-    arch_halt();
-}
-
-static void user_copy_out(struct address_space *space, uint64_t dst, const void *src, size_t len) {
+static int copy_out(struct address_space *space, uint64_t dst, const void *src, size_t len) {
     const uint8_t *s = src;
     while (len) {
         uint64_t phys = vmm_user_phys(space, dst);
-        if (!phys) user_panic("copy to unmapped page");
+        if (!phys) return -1;
         size_t chunk = PAGE_SIZE - (size_t)(dst & (PAGE_SIZE - 1));
         if (chunk > len) chunk = len;
         memcpy(phys_to_virt(phys), s, chunk);
@@ -82,146 +55,152 @@ static void user_copy_out(struct address_space *space, uint64_t dst, const void 
         s += chunk;
         len -= chunk;
     }
+    return 0;
 }
 
-static void user_zero(struct address_space *space, uint64_t dst, size_t len) {
+static int zero_out(struct address_space *space, uint64_t dst, size_t len) {
     while (len) {
         uint64_t phys = vmm_user_phys(space, dst);
-        if (!phys) user_panic("zero of unmapped page");
+        if (!phys) return -1;
         size_t chunk = PAGE_SIZE - (size_t)(dst & (PAGE_SIZE - 1));
         if (chunk > len) chunk = len;
         memset(phys_to_virt(phys), 0, chunk);
         dst += chunk;
         len -= chunk;
     }
+    return 0;
 }
 
-static void map_range(struct address_space *space, uint64_t start, uint64_t end) {
+static int map_range(struct address_space *space, uint64_t start, uint64_t end) {
     for (uint64_t va = align_down(start); va < align_up(end); va += PAGE_SIZE) {
         if (vmm_user_phys(space, va)) continue;
         uint64_t phys = pmm_alloc_page();
-        if (!phys) user_panic("out of physical memory");
-        if (vmm_map_user(space, va, phys, VMM_WRITE) != 0) user_panic("failed to map image");
-    }
-}
-
-static uint64_t stack_put(struct address_space *space, uint64_t *sp, const void *src, size_t len) {
-    if (*sp < USER_STACK_TOP - USER_STACK_SIZE + len) user_panic("initial stack overflow");
-    *sp -= len;
-    user_copy_out(space, *sp, src, len);
-    return *sp;
-}
-
-static uint64_t find_phdr_addr(const struct elf64_ehdr *eh, const struct elf64_phdr *ph) {
-    for (uint16_t i = 0; i < eh->phnum; i++) {
-        if (ph[i].type == PT_PHDR) return ph[i].vaddr;
-    }
-
-    uint64_t bytes = (uint64_t)eh->phnum * eh->phentsize;
-    for (uint16_t i = 0; i < eh->phnum; i++) {
-        if (ph[i].type != PT_LOAD) continue;
-        if (eh->phoff >= ph[i].offset &&
-            eh->phoff + bytes <= ph[i].offset + ph[i].filesz) {
-            return ph[i].vaddr + (eh->phoff - ph[i].offset);
+        if (!phys) return -1;
+        if (vmm_map_user(space, va, phys, VMM_WRITE) != 0) {
+            pmm_free_page(phys);
+            return -1;
         }
     }
     return 0;
 }
 
-static uint64_t build_linux_stack(struct address_space *space,
-                                  const struct elf64_ehdr *eh, uint64_t phdr_addr) {
-    static const char arg0[] = "/sbin/init";
-    static const uint8_t random_bytes[16] = {
-        0x54, 0x75, 0x72, 0x6b, 0x4f, 0x53, 0x64, 0x65,
-        0x76, 0x2d, 0x6d, 0x75, 0x73, 0x6c, 0x21, 0x7f,
-    };
-
-    for (uint64_t va = USER_STACK_TOP - USER_STACK_SIZE; va < USER_STACK_TOP; va += PAGE_SIZE) {
-        uint64_t phys = pmm_alloc_page();
-        if (!phys) user_panic("out of physical memory for stack");
-        if (vmm_map_user(space, va, phys, VMM_WRITE) != 0) user_panic("failed to map stack");
+static uint64_t find_phdr(const struct elf64_ehdr *eh, const struct elf64_phdr *ph) {
+    for (uint16_t i = 0; i < eh->phnum; i++) if (ph[i].type == PT_PHDR) return ph[i].vaddr;
+    uint64_t bytes = (uint64_t)eh->phnum * eh->phentsize;
+    for (uint16_t i = 0; i < eh->phnum; i++) {
+        if (ph[i].type == PT_LOAD && eh->phoff >= ph[i].offset &&
+            eh->phoff + bytes <= ph[i].offset + ph[i].filesz)
+            return ph[i].vaddr + eh->phoff - ph[i].offset;
     }
-
-    uint64_t sp = USER_STACK_TOP;
-    uint64_t execfn = stack_put(space, &sp, arg0, sizeof(arg0));
-    uint64_t randomp = stack_put(space, &sp, random_bytes, sizeof(random_bytes));
-    sp &= ~0xfULL;
-
-    const uint64_t words[] = {
-        1,
-        execfn,
-        0,
-        0,
-        AT_PHDR, phdr_addr,
-        AT_PHENT, eh->phentsize,
-        AT_PHNUM, eh->phnum,
-        AT_PAGESZ, PAGE_SIZE,
-        AT_ENTRY, eh->entry,
-        AT_RANDOM, randomp,
-        AT_EXECFN, execfn,
-        AT_NULL, 0,
-    };
-
-    uint64_t bytes = sizeof(words);
-    sp = (sp - bytes) & ~0xfULL;
-    user_copy_out(space, sp, words, sizeof(words));
-    return sp;
+    return 0;
 }
 
-void user_start(void) {
-    struct file executable;
-    if (vfs_open("/sbin/init", &executable) != 0 || executable.node.type != VFS_REG)
-        user_panic("cannot open /sbin/init");
-    const uint8_t *blob = executable.node.data;
-    size_t blob_size = (size_t)executable.node.size;
-    if (blob_size < sizeof(struct elf64_ehdr)) user_panic("ELF is truncated");
+static int put_stack(struct address_space *space, uint64_t *sp,
+                     const void *src, size_t len, uint64_t *address) {
+    if (*sp < USER_STACK_TOP - USER_STACK_SIZE + len) return -1;
+    *sp -= len;
+    if (copy_out(space, *sp, src, len) != 0) return -1;
+    *address = *sp;
+    return 0;
+}
 
-    const struct elf64_ehdr *eh = (const struct elf64_ehdr *)blob;
-    if (eh->ident[0] != 0x7f || eh->ident[1] != 'E' || eh->ident[2] != 'L' || eh->ident[3] != 'F' ||
-        eh->ident[4] != 2 || eh->ident[5] != 1 || eh->type != ET_EXEC || eh->machine != ARCH_ELF_MACHINE ||
-        eh->phentsize != sizeof(struct elf64_phdr) || !eh->phnum) {
-        user_panic("unsupported ELF64 executable");
+static int build_stack(struct address_space *space, const struct elf64_ehdr *eh,
+                       uint64_t phdr, const char *const argv[], size_t argc, uint64_t *result) {
+    static const uint8_t random[16] = {
+        0x6e, 0x61, 0x72, 0x63, 0x4f, 0x73, 0x2d, 0x6c,
+        0x69, 0x74, 0x74, 0x6c, 0x65, 0x2d, 0x6f, 0x73,
+    };
+    if (map_range(space, USER_STACK_TOP - USER_STACK_SIZE, USER_STACK_TOP) != 0) return -1;
+    uint64_t sp = USER_STACK_TOP, argp[16], randomp;
+    if (argc > 16) return -1;
+    for (size_t n = argc; n; n--) {
+        size_t len = 0;
+        while (argv[n - 1][len]) len++;
+        if (put_stack(space, &sp, argv[n - 1], len + 1, &argp[n - 1]) != 0) return -1;
     }
+    if (put_stack(space, &sp, random, sizeof(random), &randomp) != 0) return -1;
+    sp &= ~0xfULL;
+    uint64_t words[48];
+    size_t n = 0;
+    words[n++] = argc;
+    for (size_t i = 0; i < argc; i++) words[n++] = argp[i];
+    words[n++] = 0;
+    words[n++] = 0;
+    words[n++] = AT_PHDR; words[n++] = phdr;
+    words[n++] = AT_PHENT; words[n++] = eh->phentsize;
+    words[n++] = AT_PHNUM; words[n++] = eh->phnum;
+    words[n++] = AT_PAGESZ; words[n++] = PAGE_SIZE;
+    words[n++] = AT_ENTRY; words[n++] = eh->entry;
+    words[n++] = AT_RANDOM; words[n++] = randomp;
+    words[n++] = AT_EXECFN; words[n++] = argp[0];
+    words[n++] = AT_NULL; words[n++] = 0;
+    sp = (sp - n * sizeof(uint64_t)) & ~0xfULL;
+    if (copy_out(space, sp, words, n * sizeof(uint64_t)) != 0) return -1;
+    *result = sp;
+    return 0;
+}
 
+static int load(struct address_space *space, const char *path, const char *const argv[],
+                size_t argc, uint64_t *entry, uint64_t *stack) {
+    struct file executable;
+    if (!argc || vfs_open(path, &executable) != 0 || executable.node.type != VFS_REG) return -1;
+    const uint8_t *blob = executable.node.data;
+    size_t size = (size_t)executable.node.size;
+    if (size < sizeof(struct elf64_ehdr)) return -1;
+    const struct elf64_ehdr *eh = (const struct elf64_ehdr *)blob;
+    if (eh->ident[0] != 0x7f || eh->ident[1] != 'E' || eh->ident[2] != 'L' ||
+        eh->ident[3] != 'F' || eh->ident[4] != 2 || eh->ident[5] != 1 ||
+        eh->type != ET_EXEC || eh->machine != ARCH_ELF_MACHINE ||
+        eh->phentsize != sizeof(struct elf64_phdr) || !eh->phnum) return -1;
     uint64_t ph_bytes = (uint64_t)eh->phnum * eh->phentsize;
-    if (eh->phoff > blob_size || ph_bytes > blob_size - eh->phoff) user_panic("bad program headers");
+    if (eh->phoff > size || ph_bytes > size - eh->phoff) return -1;
     const struct elf64_phdr *ph = (const struct elf64_phdr *)(blob + eh->phoff);
-
-    uint64_t phdr_addr = find_phdr_addr(eh, ph);
-    if (!phdr_addr) user_panic("cannot locate runtime program headers");
-
-    struct task *task = task_create();
-    if (!task) user_panic("cannot create task");
-    struct address_space *space = task_space(task);
-
+    uint64_t phdr = find_phdr(eh, ph);
+    if (!phdr) return -1;
     for (uint16_t i = 0; i < eh->phnum; i++) {
         if (ph[i].type != PT_LOAD) continue;
-        if (ph[i].filesz > ph[i].memsz || ph[i].offset > blob_size ||
-            ph[i].filesz > blob_size - ph[i].offset)
-            user_panic("invalid PT_LOAD");
-        if (ph[i].vaddr < USER_MIN || ph[i].vaddr >= USER_IMAGE_END ||
-            ph[i].memsz > USER_IMAGE_END - ph[i].vaddr)
-            user_panic("PT_LOAD outside userspace image window");
+        if (ph[i].filesz > ph[i].memsz || ph[i].offset > size ||
+            ph[i].filesz > size - ph[i].offset || ph[i].vaddr < USER_MIN ||
+            ph[i].vaddr >= USER_IMAGE_END || ph[i].memsz > USER_IMAGE_END - ph[i].vaddr)
+            return -1;
         if (!ph[i].memsz) continue;
-
-        map_range(space, ph[i].vaddr, ph[i].vaddr + ph[i].memsz);
-        user_copy_out(space, ph[i].vaddr, blob + ph[i].offset, (size_t)ph[i].filesz);
-        if (ph[i].memsz > ph[i].filesz)
-            user_zero(space, ph[i].vaddr + ph[i].filesz,
-                      (size_t)(ph[i].memsz - ph[i].filesz));
+        if (map_range(space, ph[i].vaddr, ph[i].vaddr + ph[i].memsz) != 0 ||
+            copy_out(space, ph[i].vaddr, blob + ph[i].offset, (size_t)ph[i].filesz) != 0 ||
+            zero_out(space, ph[i].vaddr + ph[i].filesz,
+                     (size_t)(ph[i].memsz - ph[i].filesz)) != 0) return -1;
     }
-
     for (uint16_t i = 0; i < eh->phnum; i++) {
         if (ph[i].type != PT_LOAD || !ph[i].memsz) continue;
         for (uint64_t va = align_down(ph[i].vaddr);
-             va < align_up(ph[i].vaddr + ph[i].memsz); va += PAGE_SIZE) {
-            if (vmm_protect_user(space, va, (ph[i].flags & PF_W) ? VMM_WRITE : 0) != 0)
-                user_panic("failed to protect PT_LOAD");
-        }
+             va < align_up(ph[i].vaddr + ph[i].memsz); va += PAGE_SIZE)
+            if (vmm_protect_user(space, va, (ph[i].flags & PF_W) ? VMM_WRITE : 0) != 0) return -1;
     }
+    if (build_stack(space, eh, phdr, argv, argc, stack) != 0) return -1;
+    *entry = eh->entry;
+    return 0;
+}
 
-    uint64_t stack = build_linux_stack(space, eh, phdr_addr);
-    task_set_entry(task, eh->entry, stack);
+int user_exec(struct task_frame *frame, const char *path, const char *const argv[], size_t argc) {
+    struct address_space space;
+    uint64_t entry, stack;
+    if (vmm_space_create(&space) != 0) return -1;
+    if (load(&space, path, argv, argc, &entry, &stack) != 0) {
+        vmm_space_destroy(&space);
+        return -1;
+    }
+    task_exec(frame, &space, entry, stack);
+    return 0;
+}
+
+void user_start(void) {
+    static const char *argv[] = { "/sbin/init" };
+    struct task *task = task_create();
+    uint64_t entry, stack;
+    if (!task || load(task_space(task), argv[0], argv, 1, &entry, &stack) != 0) {
+        console_puts("[panic] cannot start init\n");
+        arch_halt();
+    }
+    task_set_entry(task, entry, stack);
     console_puts("[user] entering ring 3\n");
     task_start();
 }

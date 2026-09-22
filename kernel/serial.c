@@ -39,6 +39,23 @@ void serial_putc(char c) {
 #endif
 }
 
+char serial_getc(void) {
+#if defined(__x86_64__)
+    while (!(inb(COM1 + 5) & 1)) {}
+    return (char)inb(COM1);
+#elif defined(__aarch64__)
+    while (uart[6] & (1U << 4)) {}
+    return (char)uart[0];
+#else
+    for (;;) {
+        register long a0 __asm__("a0");
+        register uint64_t a7 __asm__("a7") = 2;
+        __asm__ volatile ("ecall" : "=r"(a0) : "r"(a7) : "memory");
+        if (a0 >= 0) return (char)a0;
+    }
+#endif
+}
+
 void serial_puts(const char *s) {
     while (*s) serial_putc(*s++);
 }

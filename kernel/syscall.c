@@ -2,6 +2,7 @@
 #include <kernel/mm.h>
 #include <kernel/syscall.h>
 #include <kernel/task.h>
+#include <kernel/user.h>
 #include <kernel/string.h>
 #include <kernel/vfs.h>
 #include <stddef.h>
@@ -15,32 +16,46 @@
 #define SYS_STAT               4
 #define SYS_FSTAT              5
 #define SYS_LSEEK              8
+#define SYS_PIPE              22
+#define SYS_DUP               32
+#define SYS_DUP2              33
+#define SYS_CLONE             56
+#define SYS_FORK              57
+#define SYS_EXECVE            59
 #define SYS_MMAP               9
 #define SYS_MPROTECT          10
 #define SYS_MUNMAP            11
 #define SYS_BRK               12
 #define SYS_IOCTL             16
+#define SYS_READV             19
 #define SYS_WRITEV            20
 #define SYS_SCHED_YIELD       24
 #define SYS_MADVISE           28
 #define SYS_GETPID            39
 #define SYS_FCNTL             72
 #define SYS_EXIT              60
+#define SYS_WAIT4             61
 #define SYS_ARCH_PRCTL       158
 #define SYS_SET_TID_ADDRESS  218
 #define SYS_EXIT_GROUP       231
 #define SYS_OPENAT           257
 #define SYS_NEWFSTATAT       262
 #define SYS_GETDENTS64       217
+#define SYS_DUP3             292
+#define SYS_PIPE2            293
 #else
+#define SYS_DUP               23
+#define SYS_DUP3              24
 #define SYS_FCNTL             25
 #define SYS_IOCTL             29
 #define SYS_OPENAT            56
 #define SYS_CLOSE             57
 #define SYS_GETDENTS64        61
+#define SYS_PIPE2             59
 #define SYS_LSEEK             62
 #define SYS_READ              63
 #define SYS_WRITE             64
+#define SYS_READV             65
 #define SYS_WRITEV            66
 #define SYS_NEWFSTATAT        79
 #define SYS_FSTAT             80
@@ -49,11 +64,15 @@
 #define SYS_SET_TID_ADDRESS   96
 #define SYS_SCHED_YIELD      124
 #define SYS_GETPID           172
+#define SYS_CLONE            220
+#define SYS_EXECVE           221
 #define SYS_BRK              214
 #define SYS_MUNMAP           215
 #define SYS_MMAP             222
 #define SYS_MPROTECT         226
 #define SYS_MADVISE          233
+#define SYS_WAIT4            260
+#define SYS_FORK UINT64_MAX
 #endif
 
 #define EBADF   9
@@ -68,6 +87,8 @@
 #define ENOTDIR 20
 #define EROFS 30
 #define ENOSYS 38
+#define ECHILD 10
+#define EAGAIN 11
 
 #define PROT_WRITE           0x2
 #define MAP_FIXED            0x10
@@ -191,27 +212,27 @@ static int copy_string(char *dst, uint64_t src, size_t cap) {
 }
 
 static long sys_read(uint64_t fd, uint64_t buf, uint64_t len) {
-    if (fd == 0) return 0;
-    struct file *file = task_fd_get((int)fd);
-    if (!file) return -EBADF;
-    if (file->node.type == VFS_DIR) return -EISDIR;
+    if (!task_fd_valid((int)fd)) return -EBADF;
+    struct file *file = task_fd_file((int)fd);
+    if (file && file->node.type == VFS_DIR) return -EISDIR;
     if (!vmm_user_range_ok(vmm_space_current(), buf, len, 1)) return -EFAULT;
 
     uint8_t chunk[512];
     uint64_t done = 0;
     while (done < len) {
         size_t want = len - done > sizeof(chunk) ? sizeof(chunk) : (size_t)(len - done);
-        long got = vfs_read(file, chunk, want);
+        long got = task_fd_read((int)fd, chunk, want);
         if (got < 0) return done ? (long)done : -EIO;
         if (!got) break;
         if (copy_to_user(buf + done, chunk, (size_t)got) != 0) return -EFAULT;
         done += (uint64_t)got;
+        if ((size_t)got < want) break;
     }
     return (long)done;
 }
 
 static long sys_write(uint64_t fd, uint64_t buf, uint64_t len) {
-    if (fd != 1 && fd != 2) return -EBADF;
+    if (!task_fd_valid((int)fd)) return -EBADF;
     struct address_space *space = vmm_space_current();
     if (!vmm_user_range_ok(space, buf, len, 0)) return -EFAULT;
 
@@ -221,7 +242,9 @@ static long sys_write(uint64_t fd, uint64_t buf, uint64_t len) {
 
         size_t chunk = PAGE_SIZE - (size_t)(ptr & (PAGE_SIZE - 1));
         if ((uint64_t)chunk > left) chunk = (size_t)left;
-        console_write(phys_to_virt(phys), chunk);
+        long wrote = task_fd_write((int)fd, phys_to_virt(phys), chunk);
+        if (wrote < 0) return -EBADF;
+        if ((size_t)wrote < chunk) return (long)(len - left + (uint64_t)wrote);
 
         ptr += chunk;
         left -= chunk;
@@ -237,7 +260,7 @@ static long sys_open_file(int64_t dirfd, uint64_t path_addr, uint64_t flags) {
     int fd = task_fd_open(path);
     if (fd == -1) return -ENOENT;
     if (fd == -2) return -EMFILE;
-    struct file *file = task_fd_get(fd);
+    struct file *file = task_fd_file(fd);
     if ((flags & O_DIRECTORY) && file->node.type != VFS_DIR) {
         task_fd_close(fd);
         return -ENOTDIR;
@@ -263,11 +286,11 @@ static long put_stat(const struct vnode *node, uint64_t addr) {
 }
 
 static long sys_fstat(uint64_t fd, uint64_t addr) {
-    if (fd <= 2) {
+    struct file *file = task_fd_file((int)fd);
+    if (!file && task_fd_valid((int)fd)) {
         struct vnode node = { .ino = fd + 1, .mode = 0020000 | 0666 };
         return put_stat(&node, addr);
     }
-    struct file *file = task_fd_get((int)fd);
     return file ? put_stat(&file->node, addr) : -EBADF;
 }
 
@@ -292,19 +315,18 @@ static long sys_fstatat(int64_t dirfd, uint64_t path_addr, uint64_t addr, uint64
 }
 
 static long sys_close(uint64_t fd) {
-    if (fd <= 2) return 0;
     return task_fd_close((int)fd) == 0 ? 0 : -EBADF;
 }
 
 static long sys_lseek(uint64_t fd, int64_t offset, uint64_t whence) {
-    struct file *file = task_fd_get((int)fd);
+    struct file *file = task_fd_file((int)fd);
     if (!file) return -EBADF;
     long result = vfs_seek(file, offset, (int)whence);
     return result < 0 ? -EINVAL : result;
 }
 
 static long sys_getdents(uint64_t fd, uint64_t addr, uint64_t count) {
-    struct file *file = task_fd_get((int)fd);
+    struct file *file = task_fd_file((int)fd);
     if (!file) return -EBADF;
     if (file->node.type != VFS_DIR) return -ENOTDIR;
     uint64_t written = 0;
@@ -338,13 +360,13 @@ static long sys_getdents(uint64_t fd, uint64_t addr, uint64_t count) {
 }
 
 static long sys_fcntl(uint64_t fd, uint64_t cmd) {
-    if (fd > 2 && !task_fd_get((int)fd)) return -EBADF;
+    if (!task_fd_valid((int)fd)) return -EBADF;
     if (cmd == F_GETFD || cmd == F_SETFD) return 0;
     return -EINVAL;
 }
 
 static long sys_writev(uint64_t fd, uint64_t addr, uint64_t count) {
-    if (fd != 1 && fd != 2) return -EBADF;
+    if (!task_fd_valid((int)fd)) return -EBADF;
     if (count > 1024) return -EINVAL;
 
     long total = 0;
@@ -356,6 +378,69 @@ static long sys_writev(uint64_t fd, uint64_t addr, uint64_t count) {
         total += ret;
     }
     return total;
+}
+
+static long sys_readv(uint64_t fd, uint64_t addr, uint64_t count) {
+    if (!task_fd_valid((int)fd)) return -EBADF;
+    if (count > 1024) return -EINVAL;
+    long total = 0;
+    for (uint64_t i = 0; i < count; i++) {
+        struct iovec64 iov;
+        if (copy_from_user(&iov, addr + i * sizeof(iov), sizeof(iov)) != 0) return -EFAULT;
+        if (!iov.len) continue;
+        long ret = sys_read(fd, iov.base, iov.len);
+        if (ret < 0) return total ? total : ret;
+        total += ret;
+        if ((uint64_t)ret < iov.len) break;
+    }
+    return total;
+}
+
+static long sys_pipe(uint64_t addr, uint64_t flags) {
+    if (flags) return -EINVAL;
+    int fds[2];
+    if (task_fd_pipe(fds) != 0) return -EMFILE;
+    if (copy_to_user(addr, fds, sizeof(fds)) != 0) {
+        task_fd_close(fds[0]);
+        task_fd_close(fds[1]);
+        return -EFAULT;
+    }
+    return 0;
+}
+
+static long sys_dup(uint64_t oldfd) {
+    int fd = task_fd_dup((int)oldfd, 0);
+    return fd < 0 ? -EBADF : fd;
+}
+
+static long sys_dup2(uint64_t oldfd, uint64_t newfd, uint64_t flags) {
+    if (flags) return -EINVAL;
+    int fd = task_fd_dup2((int)oldfd, (int)newfd);
+    return fd < 0 ? -EBADF : fd;
+}
+
+static long sys_execve(struct task_frame *frame, uint64_t path_addr, uint64_t argv_addr) {
+    char path[VFS_PATH_MAX];
+    char args[16][VFS_PATH_MAX];
+    const char *argv[16];
+    size_t argc = 0;
+    if (copy_string(path, path_addr, sizeof(path)) != 0) return -EFAULT;
+    if (argv_addr) {
+        for (; argc < 16; argc++) {
+            uint64_t arg;
+            if (copy_from_user(&arg, argv_addr + argc * sizeof(arg), sizeof(arg)) != 0)
+                return -EFAULT;
+            if (!arg) break;
+            if (copy_string(args[argc], arg, sizeof(args[argc])) != 0) return -EFAULT;
+            argv[argc] = args[argc];
+        }
+        if (argc == 16) return -EINVAL;
+    }
+    if (!argc) {
+        argv[0] = path;
+        argc = 1;
+    }
+    return user_exec(frame, path, argv, argc) == 0 ? 0 : -ENOENT;
 }
 
 static long sys_mmap(uint64_t addr, uint64_t len, uint64_t prot, uint64_t flags, uint64_t fd) {
@@ -465,6 +550,14 @@ static long dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
     case SYS_BRK:             return 0;
     case SYS_IOCTL:           return sys_ioctl(a1, a2, a3);
     case SYS_WRITEV:          return sys_writev(a1, a2, a3);
+    case SYS_READV:           return sys_readv(a1, a2, a3);
+    case SYS_DUP:             return sys_dup(a1);
+#if defined(__x86_64__)
+    case SYS_DUP2:            return sys_dup2(a1, a2, 0);
+    case SYS_PIPE:            return sys_pipe(a1, 0);
+#endif
+    case SYS_DUP3:            return sys_dup2(a1, a2, a3);
+    case SYS_PIPE2:           return sys_pipe(a1, a2);
     case SYS_MADVISE:         return 0;
     case SYS_GETPID:          return task_pid();
     case SYS_FCNTL:           return sys_fcntl(a1, a2);
@@ -482,17 +575,34 @@ static long dispatch(uint64_t nr, uint64_t a1, uint64_t a2, uint64_t a3,
 
 void syscall_dispatch(struct task_frame *frame) {
     uint64_t nr = arch_syscall_number(frame);
+    uint64_t a1 = arch_syscall_arg(frame, 0);
+    uint64_t a2 = arch_syscall_arg(frame, 1);
+    uint64_t a3 = arch_syscall_arg(frame, 2);
+    if (nr == SYS_FORK || nr == SYS_CLONE) {
+        int pid = task_fork(frame);
+        arch_syscall_return(frame, pid < 0 ? (uint64_t)-EAGAIN : (uint64_t)pid);
+        return;
+    }
+    if (nr == SYS_EXECVE) {
+        arch_syscall_return(frame, (uint64_t)sys_execve(frame, a1, a2));
+        return;
+    }
+    if (nr == SYS_WAIT4) {
+        long result;
+        if (task_wait(frame, (int)a1, a2, (int)a3, &result)) return;
+        arch_syscall_return(frame, result < 0 ? (uint64_t)-ECHILD : (uint64_t)result);
+        return;
+    }
     if (nr == SYS_SCHED_YIELD) {
         arch_syscall_return(frame, 0);
         task_yield(frame);
         return;
     }
     if (nr == SYS_EXIT || nr == SYS_EXIT_GROUP) {
-        task_exit(frame);
+        task_exit(frame, (int)a1);
         return;
     }
-    arch_syscall_return(frame, (uint64_t)dispatch(nr, arch_syscall_arg(frame, 0),
-                        arch_syscall_arg(frame, 1), arch_syscall_arg(frame, 2),
+    arch_syscall_return(frame, (uint64_t)dispatch(nr, a1, a2, a3,
                         arch_syscall_arg(frame, 3), arch_syscall_arg(frame, 4),
                         arch_syscall_arg(frame, 5)));
 }
