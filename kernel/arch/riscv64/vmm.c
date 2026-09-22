@@ -78,6 +78,40 @@ int vmm_space_create(struct address_space *space) {
     return 0;
 }
 
+static int clone_table(uint64_t dst_phys, uint64_t src_phys, unsigned level) {
+    uint64_t *dst = phys_to_virt(dst_phys);
+    uint64_t *src = phys_to_virt(src_phys);
+    for (size_t i = 0; i < 512; i++) {
+        uint64_t pte = src[i];
+        if (!(pte & PTE_V)) continue;
+        uint64_t page = pmm_alloc_page();
+        if (!page) return -1;
+        dst[i] = make_pte(page, pte & 0x3ff);
+        if (pte & (PTE_R | PTE_W | PTE_X))
+            __builtin_memcpy(phys_to_virt(page), phys_to_virt(pte_phys(pte)), PAGE_SIZE);
+        else if (!level || clone_table(page, pte_phys(pte), level - 1) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+int vmm_space_clone(struct address_space *dst, struct address_space *src) {
+    if (vmm_space_create(dst) != 0) return -1;
+    uint64_t *to = phys_to_virt(dst->root);
+    uint64_t *from = phys_to_virt(src->root);
+    for (size_t i = 0; i < 256; i++) {
+        if (!(from[i] & PTE_V)) continue;
+        uint64_t page = pmm_alloc_page();
+        if (!page) goto fail;
+        to[i] = make_pte(page, from[i] & 0x3ff);
+        if (clone_table(page, pte_phys(from[i]), levels() - 2) != 0) goto fail;
+    }
+    return 0;
+fail:
+    vmm_space_destroy(dst);
+    return -1;
+}
+
 void vmm_space_activate(struct address_space *space) {
     current_space = space;
     uint64_t satp = (read_satp() & SATP_MODE_MASK) | (space->root >> 12);

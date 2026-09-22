@@ -82,6 +82,30 @@ int vmm_space_create(struct address_space *space) {
     return space->root ? 0 : -1;
 }
 
+static int clone_table(uint64_t dst_phys, uint64_t src_phys, unsigned level) {
+    uint64_t *dst = phys_to_virt(dst_phys);
+    uint64_t *src = phys_to_virt(src_phys);
+    for (size_t i = 0; i < 512; i++) {
+        uint64_t entry = src[i];
+        if (!(entry & DESC_VALID)) continue;
+        uint64_t page = pmm_alloc_page();
+        if (!page) return -1;
+        dst[i] = page | (entry & ~ADDR_MASK);
+        if (level == 1 || !(entry & DESC_TABLE))
+            __builtin_memcpy(phys_to_virt(page), phys_to_virt(entry & ADDR_MASK), PAGE_SIZE);
+        else if (clone_table(page, entry & ADDR_MASK, level - 1) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+int vmm_space_clone(struct address_space *dst, struct address_space *src) {
+    if (vmm_space_create(dst) != 0) return -1;
+    if (clone_table(dst->root, src->root, 4) == 0) return 0;
+    vmm_space_destroy(dst);
+    return -1;
+}
+
 void vmm_space_activate(struct address_space *space) {
     current_space = space;
     if (current_el() == 2) __asm__ volatile ("msr ttbr0_el2, %0; isb" : : "r"(space->root) : "memory");

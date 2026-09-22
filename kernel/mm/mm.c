@@ -132,6 +132,40 @@ int vmm_space_create(struct address_space *space) {
     return 0;
 }
 
+static int clone_table(uint64_t dst_phys, uint64_t src_phys, unsigned level) {
+    uint64_t *dst = phys_to_virt(dst_phys);
+    uint64_t *src = phys_to_virt(src_phys);
+    for (size_t i = 0; i < 512; i++) {
+        uint64_t entry = src[i];
+        if (!(entry & PTE_PRESENT)) continue;
+        uint64_t page = pmm_alloc_page();
+        if (!page) return -1;
+        dst[i] = page | (entry & ~ADDR_MASK);
+        if (level == 1 || (entry & PTE_HUGE))
+            memcpy(phys_to_virt(page), phys_to_virt(entry & ADDR_MASK), PAGE_SIZE);
+        else if (clone_table(page, entry & ADDR_MASK, level - 1) != 0)
+            return -1;
+    }
+    return 0;
+}
+
+int vmm_space_clone(struct address_space *dst, struct address_space *src) {
+    if (vmm_space_create(dst) != 0) return -1;
+    uint64_t *to = phys_to_virt(dst->root);
+    uint64_t *from = phys_to_virt(src->root);
+    for (size_t i = 0; i < 256; i++) {
+        if (!(from[i] & PTE_PRESENT)) continue;
+        uint64_t page = pmm_alloc_page();
+        if (!page) goto fail;
+        to[i] = page | (from[i] & ~ADDR_MASK);
+        if (clone_table(page, from[i] & ADDR_MASK, 3) != 0) goto fail;
+    }
+    return 0;
+fail:
+    vmm_space_destroy(dst);
+    return -1;
+}
+
 void vmm_space_activate(struct address_space *space) {
     current_space = space;
     __asm__ volatile ("mov %0, %%cr3" : : "r"(space->root) : "memory");
