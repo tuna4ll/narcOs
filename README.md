@@ -26,6 +26,6 @@ if (result.status != NARC_OK) {
 ```
 
 Native syscall IDs are architecture-independent. Calls return their value and
-status in separate registers, represented by `narc_result_t`. The existing
-Linux syscall ABI remains temporarily available only as a musl compatibility
-path while musl is ported onto `libnarc`.
+status in separate registers, represented by `narc_result_t`. User programs
+are freestanding binaries linked directly with `libnarc`; no external libc is
+part of the build.

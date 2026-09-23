@@ -1,55 +1,44 @@
-#include <dirent.h>
-#include <fcntl.h>
-#include <stdio.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <narcos/narc.h>
 
-int main(void) {
-    puts("narcOs init");
+static int write_bytes(const void *data, size_t length) {
+    const uint8_t *bytes = data;
+    while (length) {
+        narc_result_t result = narc_write(1, bytes, length);
+        if (result.status != NARC_OK || result.value <= 0) return -1;
+        bytes += (size_t)result.value;
+        length -= (size_t)result.value;
+    }
+    return 0;
+}
 
+int narc_main(void) {
+    static const char banner[] = "narcOs init\nlibnarc: native ABI ready\n";
+    if (write_bytes(banner, sizeof(banner) - 1) != 0) return 1;
     narc_result_t abi = narc_abi_query();
     narc_result_t pid = narc_getpid();
-    static const char native_message[] = "libnarc: native ABI ready\n";
-    narc_result_t wrote = narc_write(1, native_message, sizeof(native_message) - 1);
     if (abi.status != NARC_OK || abi.value != (int64_t)NARC_ABI_VERSION ||
-        pid.status != NARC_OK || pid.value <= 0 ||
-        wrote.status != NARC_OK || wrote.value != (int64_t)(sizeof(native_message) - 1))
-        return 8;
+        pid.status != NARC_OK || pid.value <= 0)
+        return 2;
 
     static const char motd_path[] = "/etc/motd";
-    narc_result_t native_fd = narc_open(motd_path, sizeof(motd_path) - 1, NARC_OPEN_READ);
-    if (native_fd.status != NARC_OK) return 9;
-    char native_buf[8];
-    narc_result_t native_read = narc_read((int)native_fd.value, native_buf, sizeof(native_buf));
-    narc_result_t native_seek = narc_seek((int)native_fd.value, 0, NARC_SEEK_BEGIN);
-    narc_result_t native_close = narc_close((int)native_fd.value);
-    if (native_read.status != NARC_OK || native_read.value != 7 ||
-        native_seek.status != NARC_OK || native_seek.value != 0 ||
-        native_close.status != NARC_OK)
-        return 10;
+    narc_result_t file = narc_open(motd_path, sizeof(motd_path) - 1, NARC_OPEN_READ);
+    if (file.status != NARC_OK) return 3;
+
+    uint8_t buffer[64];
+    narc_result_t read = narc_read((int)file.value, buffer, sizeof(buffer));
+    if (read.status != NARC_OK) return 4;
+    static const char motd[] = "motd: ";
+    if (write_bytes(motd, sizeof(motd) - 1) != 0 ||
+        write_bytes(buffer, (size_t)read.value) != 0)
+        return 5;
+
+    narc_result_t seek = narc_seek((int)file.value, 0, NARC_SEEK_BEGIN);
+    narc_result_t close = narc_close((int)file.value);
+    if (seek.status != NARC_OK || seek.value != 0 || close.status != NARC_OK) return 6;
 
     static const char missing_path[] = "/missing";
     narc_result_t missing = narc_open(missing_path, sizeof(missing_path) - 1, NARC_OPEN_READ);
-    if (missing.status != NARC_NOT_FOUND) return 11;
-
-    int fd = openat(AT_FDCWD, "/etc/motd", O_RDONLY);
-    if (fd < 0) return 1;
-    struct stat st;
-    if (fstat(fd, &st) != 0) return 2;
-    struct stat path_st;
-    if (stat("/etc/motd", &path_st) != 0 || path_st.st_size != st.st_size) return 3;
-    char buf[64];
-    ssize_t len = read(fd, buf, sizeof(buf));
-    if (len < 0) return 4;
-    printf("motd (%lld bytes): %.*s", (long long)st.st_size, (int)len, buf);
-    if (lseek(fd, 0, SEEK_SET) != 0 || close(fd) != 0) return 5;
-
-    DIR *dir = opendir("/bin");
-    if (!dir) return 6;
-    puts("/bin:");
-    struct dirent *entry;
-    while ((entry = readdir(dir))) printf("  %s\n", entry->d_name);
-    if (closedir(dir) != 0) return 7;
+    if (missing.status != NARC_NOT_FOUND) return 7;
+    if (narc_yield().status != NARC_OK) return 8;
     return 0;
 }

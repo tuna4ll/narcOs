@@ -11,9 +11,10 @@ ROOTFS_FILES := $(shell find userland/rootfs -type f 2>/dev/null | sort)
 
 COMMON_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding \
                  -fno-stack-protector -fno-pic -fno-pie -I kernel/include -I include
-COMMON_USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -static -fno-pie \
-                      -Wl,-z,max-page-size=0x1000 \
-                      -Wl,--build-id=none
+COMMON_USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
+                      -fno-stack-protector -fno-pic -fno-pie -I include
+COMMON_USER_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
+                       -Wl,--build-id=none -Wl,-e,_start
 LIBNARC_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
                   -fno-stack-protector -I include
 
@@ -24,8 +25,8 @@ KERNEL_CFLAGS := -m64 -mno-red-zone -mcmodel=kernel -mno-sse -mno-sse2
 KERNEL_ASFLAGS := -m64 -mno-red-zone -mcmodel=kernel
 USER_ARCH_FLAGS := -march=x86-64 -mtune=generic
 USER_LINK_FLAGS := -no-pie -Wl,-Ttext-segment=$(USER_BASE)
-MUSL_BUILD_CC := cc
-MUSL_CFLAGS := -O2 -march=x86-64 -mtune=generic
+USER_CC := cc
+USER_AR := ar
 EFI_BOOT := BOOTX64.EFI
 ISO_BIOS_FLAGS := -b boot/limine/limine-bios-cd.bin -no-emul-boot -boot-load-size 4 -boot-info-table
 else ifeq ($(ARCH),aarch64)
@@ -35,20 +36,19 @@ KERNEL_CFLAGS := -mgeneral-regs-only -mstrict-align
 KERNEL_ASFLAGS :=
 USER_ARCH_FLAGS := -march=armv8-a -fno-link-libatomic
 USER_LINK_FLAGS := -no-pie -Wl,-Ttext-segment=$(USER_BASE)
-MUSL_BUILD_CC := aarch64-linux-gnu-gcc
-MUSL_CFLAGS := -O2 -march=armv8-a
+USER_CC := aarch64-linux-gnu-gcc
+USER_AR := aarch64-linux-gnu-ar
 EFI_BOOT := BOOTAA64.EFI
 else ifeq ($(ARCH),riscv64)
 KCC := riscv64-linux-gnu-gcc
 KLD := riscv64-linux-gnu-ld
 KERNEL_CFLAGS := -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany -mno-relax -msmall-data-limit=0
 KERNEL_ASFLAGS := -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany -mno-relax -msmall-data-limit=0
-USER_ARCH_FLAGS := -march=rv64gc_zicsr_zifencei -mabi=lp64d -fno-link-libatomic
+USER_ARCH_FLAGS := -march=rv64gc_zicsr_zifencei -mabi=lp64d \
+                   -msmall-data-limit=0 -fno-link-libatomic
 USER_LINK_FLAGS := -no-pie -Wl,-Ttext-segment=$(USER_BASE)
-MUSL_BUILD_CC := riscv64-linux-gnu-gcc
-MUSL_CFLAGS := -O2 -march=rv64gc_zicsr_zifencei -mabi=lp64d
-MUSL_AR := riscv64-linux-gnu-ar
-MUSL_RANLIB := riscv64-linux-gnu-ranlib
+USER_CC := riscv64-linux-gnu-gcc
+USER_AR := riscv64-linux-gnu-ar
 EFI_BOOT := BOOTRISCV64.EFI
 else
 $(error unsupported ARCH: $(ARCH))
@@ -57,8 +57,10 @@ endif
 CFLAGS := $(COMMON_CFLAGS) $(KERNEL_CFLAGS)
 ASFLAGS := -ffreestanding -fno-pic -fno-pie $(KERNEL_ASFLAGS)
 USER_CFLAGS := $(COMMON_USER_CFLAGS) $(USER_ARCH_FLAGS) $(USER_LINK_FLAGS)
+USER_LDFLAGS := $(COMMON_USER_LDFLAGS) $(USER_LINK_FLAGS)
 LINKER := kernel/arch/$(ARCH)/linker.ld
 LIBNARC_OBJ := $(BUILD)/lib/libnarc/narc.o
+LIBNARC_CRT := $(BUILD)/lib/libnarc/crt0.o
 LIBNARC := $(BUILD)/lib/libnarc.a
 
 COMMON_KERNEL_C := $(shell find kernel -path kernel/arch -prune -o -name '*.c' -print | sort)
@@ -73,23 +75,26 @@ KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) \
 .PHONY: all kernel libnarc userland iso run run-serial clean distclean
 all: iso
 
-include recipes/musl/RECIPE
 include recipes/limine/RECIPE
 include recipes/edk2/RECIPE
 
 $(LIBNARC_OBJ): lib/libnarc/narc.c include/narcos/abi.h include/narcos/narc.h
 	@mkdir -p $(dir $@)
-	$(MUSL_BUILD_CC) $(LIBNARC_CFLAGS) $(USER_ARCH_FLAGS) -c $< -o $@
+	$(USER_CC) $(LIBNARC_CFLAGS) $(USER_ARCH_FLAGS) -c $< -o $@
+
+$(LIBNARC_CRT): lib/libnarc/arch/$(ARCH)/crt0.S
+	@mkdir -p $(dir $@)
+	$(USER_CC) -ffreestanding -fno-pic -fno-pie $(USER_ARCH_FLAGS) -c $< -o $@
 
 $(LIBNARC): $(LIBNARC_OBJ)
 	@mkdir -p $(dir $@)
-	$(MUSL_AR) rcs $@ $^
+	$(USER_AR) rcs $@ $^
 
-libnarc: $(LIBNARC)
+libnarc: $(LIBNARC) $(LIBNARC_CRT)
 
-$(USER_APP): userland/init.c $(MUSL_CC) $(LIBNARC)
+$(USER_APP): userland/init.c $(LIBNARC) $(LIBNARC_CRT)
 	@mkdir -p $(dir $@)
-	$(MUSL_CC) $(USER_CFLAGS) -I include $< $(LIBNARC) -o $@
+	$(USER_CC) $(USER_CFLAGS) $(LIBNARC_CRT) $< $(LIBNARC) $(USER_LDFLAGS) -o $@
 
 userland: $(USER_APP)
 
