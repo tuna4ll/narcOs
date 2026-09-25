@@ -12,11 +12,12 @@ ROOTFS_FILES := $(shell find userland/rootfs -type f 2>/dev/null | sort)
 COMMON_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding \
                  -fno-stack-protector -fno-pic -fno-pie -I kernel/include -I include
 COMMON_USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
-                      -fno-stack-protector -fno-pic -fno-pie -I include
+                      -fno-stack-protector -fno-pic -fno-pie -I include \
+                      -I lib/libnarc/include
 COMMON_USER_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
                        -Wl,--build-id=none -Wl,-e,_start
 LIBNARC_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
-                  -fno-stack-protector -I include
+                  -fno-stack-protector -I include -I lib/libnarc/include
 
 ifeq ($(ARCH),x86_64)
 KCC := cc
@@ -59,7 +60,10 @@ ASFLAGS := -ffreestanding -fno-pic -fno-pie $(KERNEL_ASFLAGS)
 USER_CFLAGS := $(COMMON_USER_CFLAGS) $(USER_ARCH_FLAGS) $(USER_LINK_FLAGS)
 USER_LDFLAGS := $(COMMON_USER_LDFLAGS) $(USER_LINK_FLAGS)
 LINKER := kernel/arch/$(ARCH)/linker.ld
-LIBNARC_OBJ := $(BUILD)/lib/libnarc/narc.o
+LIBNARC_COMMON_C := $(shell find lib/libnarc/src -name '*.c' | sort)
+LIBNARC_ARCH_C := lib/libnarc/arch/$(ARCH)/syscall.c
+LIBNARC_C := $(LIBNARC_COMMON_C) $(LIBNARC_ARCH_C)
+LIBNARC_OBJ := $(patsubst lib/libnarc/%.c,$(BUILD)/lib/libnarc/%.o,$(LIBNARC_C))
 LIBNARC_CRT := $(BUILD)/lib/libnarc/crt0.o
 LIBNARC := $(BUILD)/lib/libnarc.a
 
@@ -78,7 +82,8 @@ all: iso
 include recipes/limine/RECIPE
 include recipes/edk2/RECIPE
 
-$(LIBNARC_OBJ): lib/libnarc/narc.c include/narcos/abi.h include/narcos/narc.h
+$(BUILD)/lib/libnarc/%.o: lib/libnarc/%.c include/narcos/abi.h \
+                         lib/libnarc/include/narcos/narc.h
 	@mkdir -p $(dir $@)
 	$(USER_CC) $(LIBNARC_CFLAGS) $(USER_ARCH_FLAGS) -c $< -o $@
 
@@ -88,6 +93,7 @@ $(LIBNARC_CRT): lib/libnarc/arch/$(ARCH)/crt0.S
 
 $(LIBNARC): $(LIBNARC_OBJ)
 	@mkdir -p $(dir $@)
+	$(RM) $@
 	$(USER_AR) rcs $@ $^
 
 libnarc: $(LIBNARC) $(LIBNARC_CRT)

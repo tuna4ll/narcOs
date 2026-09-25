@@ -10,8 +10,8 @@ Use `aarch64` or `riscv64` to target another architecture.
 
 ## Native userspace ABI
 
-`libnarc` is the native userspace-to-kernel interface. Its public headers live
-under `include/narcos`, and the build produces `build/<arch>/lib/libnarc.a`.
+`libnarc` is the native userspace-to-kernel interface. Its public API lives in
+`lib/libnarc/include`, and the build produces `build/<arch>/lib/libnarc.a`.
 The initial API covers ABI discovery, process identity and yielding, plus basic
 file I/O:
 
