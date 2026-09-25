@@ -1,0 +1,19 @@
+#include "../internal/narc.h"
+#include <errno.h>
+#include <fcntl.h>
+#include <string.h>
+
+int open(const char *path, int flags, ...) {
+    uint32_t native = 0;
+    switch (flags & O_ACCMODE) {
+    case O_RDONLY: native |= NARC_OPEN_READ; break;
+    case O_WRONLY: native |= NARC_OPEN_WRITE; break;
+    case O_RDWR:   native |= NARC_OPEN_READ | NARC_OPEN_WRITE; break;
+    default:
+        errno = EINVAL;
+        return -1;
+    }
+    if (flags & O_CREAT) native |= NARC_OPEN_CREATE;
+    if (flags & O_DIRECTORY) native |= NARC_OPEN_DIRECTORY;
+    return (int)__libc_result(narc_open(path, strlen(path), native));
+}

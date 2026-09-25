@@ -12,12 +12,13 @@ ROOTFS_FILES := $(shell find userland/rootfs -type f 2>/dev/null | sort)
 COMMON_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding \
                  -fno-stack-protector -fno-pic -fno-pie -I kernel/include -I include
 COMMON_USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
-                      -fno-stack-protector -fno-pic -fno-pie -I include \
-                      -I lib/libnarc/include
+                      -fno-stack-protector -fno-pic -fno-pie \
+                      -I lib/libc/include -I lib/libnarc/include -I include
 COMMON_USER_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
                        -Wl,--build-id=none -Wl,-e,_start
 LIBNARC_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
                   -fno-stack-protector -I include -I lib/libnarc/include
+LIBC_CFLAGS := $(COMMON_USER_CFLAGS) -fno-builtin
 
 ifeq ($(ARCH),x86_64)
 KCC := cc
@@ -64,8 +65,12 @@ LIBNARC_COMMON_C := $(shell find lib/libnarc/src -name '*.c' | sort)
 LIBNARC_ARCH_C := lib/libnarc/arch/$(ARCH)/syscall.c
 LIBNARC_C := $(LIBNARC_COMMON_C) $(LIBNARC_ARCH_C)
 LIBNARC_OBJ := $(patsubst lib/libnarc/%.c,$(BUILD)/lib/libnarc/%.o,$(LIBNARC_C))
-LIBNARC_CRT := $(BUILD)/lib/libnarc/crt0.o
 LIBNARC := $(BUILD)/lib/libnarc.a
+LIBC_C := $(shell find lib/libc/src -name '*.c' | sort)
+LIBC_OBJ := $(patsubst lib/libc/%.c,$(BUILD)/lib/libc/%.o,$(LIBC_C))
+LIBC_CRT0 := $(BUILD)/lib/libc/crt0.o
+LIBC_CRT1 := $(BUILD)/lib/libc/crt1.o
+LIBC := $(BUILD)/lib/libc.a
 
 COMMON_KERNEL_C := $(shell find kernel -path kernel/arch -prune -o -name '*.c' -print | sort)
 COMMON_KERNEL_S := $(shell find kernel -path kernel/arch -prune -o -name '*.S' -print | sort)
@@ -76,7 +81,7 @@ KERNEL_S := $(COMMON_KERNEL_S) $(ARCH_KERNEL_S)
 KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) \
             $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S))
 
-.PHONY: all kernel libnarc userland iso run run-serial clean distclean
+.PHONY: all kernel libnarc libc userland iso run run-serial clean distclean
 all: iso
 
 include recipes/limine/RECIPE
@@ -87,20 +92,36 @@ $(BUILD)/lib/libnarc/%.o: lib/libnarc/%.c include/narcos/abi.h \
 	@mkdir -p $(dir $@)
 	$(USER_CC) $(LIBNARC_CFLAGS) $(USER_ARCH_FLAGS) -c $< -o $@
 
-$(LIBNARC_CRT): lib/libnarc/arch/$(ARCH)/crt0.S
-	@mkdir -p $(dir $@)
-	$(USER_CC) -ffreestanding -fno-pic -fno-pie $(USER_ARCH_FLAGS) -c $< -o $@
-
 $(LIBNARC): $(LIBNARC_OBJ)
 	@mkdir -p $(dir $@)
 	$(RM) $@
 	$(USER_AR) rcs $@ $^
 
-libnarc: $(LIBNARC) $(LIBNARC_CRT)
+libnarc: $(LIBNARC)
 
-$(USER_APP): userland/init.c $(LIBNARC) $(LIBNARC_CRT)
+$(BUILD)/lib/libc/%.o: lib/libc/%.c
 	@mkdir -p $(dir $@)
-	$(USER_CC) $(USER_CFLAGS) $(LIBNARC_CRT) $< $(LIBNARC) $(USER_LDFLAGS) -o $@
+	$(USER_CC) $(LIBC_CFLAGS) $(USER_ARCH_FLAGS) -c $< -o $@
+
+$(LIBC_CRT0): lib/libc/crt/arch/$(ARCH)/crt0.S
+	@mkdir -p $(dir $@)
+	$(USER_CC) -ffreestanding -fno-pic -fno-pie $(USER_ARCH_FLAGS) -c $< -o $@
+
+$(LIBC_CRT1): lib/libc/crt/crt1.c
+	@mkdir -p $(dir $@)
+	$(USER_CC) $(LIBC_CFLAGS) $(USER_ARCH_FLAGS) -c $< -o $@
+
+$(LIBC): $(LIBC_OBJ)
+	@mkdir -p $(dir $@)
+	$(RM) $@
+	$(USER_AR) rcs $@ $^
+
+libc: $(LIBC) $(LIBC_CRT0) $(LIBC_CRT1)
+
+$(USER_APP): userland/init.c $(LIBC) $(LIBNARC) $(LIBC_CRT0) $(LIBC_CRT1)
+	@mkdir -p $(dir $@)
+	$(USER_CC) $(USER_CFLAGS) $(LIBC_CRT0) $(LIBC_CRT1) $< \
+		$(LIBC) $(LIBNARC) $(USER_LDFLAGS) -o $@
 
 userland: $(USER_APP)
 
