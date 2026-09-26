@@ -10,10 +10,9 @@ Use `aarch64` or `riscv64` to target another architecture.
 
 ## Native userspace ABI
 
-`libnarc` is the native userspace-to-kernel interface. Its public API lives in
-`lib/libnarc/include`, and the build produces `build/<arch>/lib/libnarc.a`.
-The initial API covers ABI discovery, process identity and yielding, plus basic
-file I/O:
+`libnarc` is the native userspace-to-kernel interface. `libc` provides the
+standard C and POSIX surface above it. The build installs both into
+`build/<arch>/sysroot/usr` and links user programs through that sysroot.
 
 ```c
 #include <narcos/narc.h>
@@ -27,5 +26,4 @@ if (result.status != NARC_OK) {
 
 Native syscall IDs are architecture-independent. Calls return their value and
 status in separate registers, represented by `narc_result_t`. User programs
-are freestanding binaries linked directly with `libnarc`; no external libc is
-part of the build.
+link with the project-owned `libc.a` and `libnarc.a` archives.

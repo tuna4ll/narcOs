@@ -3,6 +3,10 @@ ARCH ?= x86_64
 BUILD := build/$(ARCH)
 DIST := dist/$(ARCH)
 CACHE := .cache
+SYSROOT := $(BUILD)/sysroot
+SYSROOT_INCLUDE := $(SYSROOT)/usr/include
+SYSROOT_LIB := $(SYSROOT)/usr/lib
+SYSROOT_STAMP := $(SYSROOT)/.installed
 USER_APP := $(BUILD)/userland/init
 INITRAMFS := $(BUILD)/initramfs.tar
 INITRAMFS_ROOT := $(BUILD)/initramfs_root
@@ -12,13 +16,13 @@ ROOTFS_FILES := $(shell find userland/rootfs -type f 2>/dev/null | sort)
 COMMON_CFLAGS := -std=gnu11 -O2 -Wall -Wextra -Werror -ffreestanding \
                  -fno-stack-protector -fno-pic -fno-pie -I kernel/include -I include
 COMMON_USER_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
-                      -fno-stack-protector -fno-pic -fno-pie \
-                      -I lib/libc/include -I lib/libnarc/include -I include
+                      -fno-stack-protector -fno-pic -fno-pie
 COMMON_USER_LDFLAGS := -nostdlib -static -Wl,-z,max-page-size=0x1000 \
                        -Wl,--build-id=none -Wl,-e,_start
 LIBNARC_CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -ffreestanding \
                   -fno-stack-protector -I include -I lib/libnarc/include
-LIBC_CFLAGS := $(COMMON_USER_CFLAGS) -fno-builtin
+LIBC_CFLAGS := $(COMMON_USER_CFLAGS) -fno-builtin -I lib/libc/include \
+               -I lib/libnarc/include -I include
 
 ifeq ($(ARCH),x86_64)
 KCC := cc
@@ -58,7 +62,8 @@ endif
 
 CFLAGS := $(COMMON_CFLAGS) $(KERNEL_CFLAGS)
 ASFLAGS := -ffreestanding -fno-pic -fno-pie $(KERNEL_ASFLAGS)
-USER_CFLAGS := $(COMMON_USER_CFLAGS) $(USER_ARCH_FLAGS) $(USER_LINK_FLAGS)
+USER_CFLAGS := $(COMMON_USER_CFLAGS) $(USER_ARCH_FLAGS) $(USER_LINK_FLAGS) \
+               --sysroot=$(abspath $(SYSROOT))
 USER_LDFLAGS := $(COMMON_USER_LDFLAGS) $(USER_LINK_FLAGS)
 LINKER := kernel/arch/$(ARCH)/linker.ld
 LIBNARC_COMMON_C := $(shell find lib/libnarc/src -name '*.c' | sort)
@@ -71,6 +76,9 @@ LIBC_OBJ := $(patsubst lib/libc/%.c,$(BUILD)/lib/libc/%.o,$(LIBC_C))
 LIBC_CRT0 := $(BUILD)/lib/libc/crt0.o
 LIBC_CRT1 := $(BUILD)/lib/libc/crt1.o
 LIBC := $(BUILD)/lib/libc.a
+LIBC_HEADERS := $(shell find lib/libc/include -type f | sort)
+LIBNARC_HEADERS := $(shell find lib/libnarc/include -type f | sort)
+UAPI_HEADERS := $(shell find include/narcos -type f | sort)
 
 COMMON_KERNEL_C := $(shell find kernel -path kernel/arch -prune -o -name '*.c' -print | sort)
 COMMON_KERNEL_S := $(shell find kernel -path kernel/arch -prune -o -name '*.S' -print | sort)
@@ -81,7 +89,7 @@ KERNEL_S := $(COMMON_KERNEL_S) $(ARCH_KERNEL_S)
 KERNEL_O := $(patsubst %.c,$(BUILD)/%.o,$(KERNEL_C)) \
             $(patsubst %.S,$(BUILD)/%.o,$(KERNEL_S))
 
-.PHONY: all kernel libnarc libc userland iso run run-serial clean distclean
+.PHONY: all kernel libnarc libc sysroot userland iso run run-serial clean distclean
 all: iso
 
 include recipes/limine/RECIPE
@@ -118,10 +126,25 @@ $(LIBC): $(LIBC_OBJ)
 
 libc: $(LIBC) $(LIBC_CRT0) $(LIBC_CRT1)
 
-$(USER_APP): userland/init.c $(LIBC) $(LIBNARC) $(LIBC_CRT0) $(LIBC_CRT1)
+$(SYSROOT_STAMP): $(LIBC) $(LIBNARC) $(LIBC_CRT0) $(LIBC_CRT1) \
+                  $(LIBC_HEADERS) $(LIBNARC_HEADERS) $(UAPI_HEADERS)
+	rm -rf $(SYSROOT)
+	mkdir -p $(SYSROOT_INCLUDE) $(SYSROOT_LIB)
+	cp -R lib/libc/include/. $(SYSROOT_INCLUDE)/
+	cp -R lib/libnarc/include/. $(SYSROOT_INCLUDE)/
+	cp -R include/narcos $(SYSROOT_INCLUDE)/
+	cp $(LIBC) $(SYSROOT_LIB)/libc.a
+	cp $(LIBNARC) $(SYSROOT_LIB)/libnarc.a
+	cp $(LIBC_CRT0) $(SYSROOT_LIB)/crt0.o
+	cp $(LIBC_CRT1) $(SYSROOT_LIB)/crt1.o
+	touch $@
+
+sysroot: $(SYSROOT_STAMP)
+
+$(USER_APP): userland/init.c $(SYSROOT_STAMP)
 	@mkdir -p $(dir $@)
-	$(USER_CC) $(USER_CFLAGS) $(LIBC_CRT0) $(LIBC_CRT1) $< \
-		$(LIBC) $(LIBNARC) $(USER_LDFLAGS) -o $@
+	$(USER_CC) $(USER_CFLAGS) $(SYSROOT_LIB)/crt0.o $(SYSROOT_LIB)/crt1.o $< \
+		-L$(SYSROOT_LIB) -lc -lnarc $(USER_LDFLAGS) -o $@
 
 userland: $(USER_APP)
 
