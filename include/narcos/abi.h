@@ -21,6 +21,9 @@ enum narc_syscall {
     NARC_SYS_READ      = 0x0102,
     NARC_SYS_WRITE     = 0x0103,
     NARC_SYS_SEEK      = 0x0104,
+
+    NARC_SYS_MAP       = 0x0200,
+    NARC_SYS_UNMAP     = 0x0201,
 };
 
 enum narc_status {
@@ -52,6 +55,11 @@ enum narc_seek_origin {
     NARC_SEEK_BEGIN   = 0,
     NARC_SEEK_CURRENT = 1,
     NARC_SEEK_END     = 2,
+};
+
+enum narc_map_flags {
+    NARC_MAP_READ  = 1u << 0,
+    NARC_MAP_WRITE = 1u << 1,
 };
 
 typedef struct narc_result {

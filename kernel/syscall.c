@@ -6,6 +6,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define USER_MMAP_BASE 0x0000000100000000ULL
+#define USER_MMAP_END  0x0000000140000000ULL
+
 struct kernel_result {
     uint64_t value;
     uint32_t status;
@@ -141,6 +144,60 @@ static struct kernel_result handle_seek(uint64_t fd, int64_t offset, uint64_t or
     return result_ok((uint64_t)value);
 }
 
+static uint64_t page_align(uint64_t value) {
+    if (value > UINT64_MAX - (PAGE_SIZE - 1)) return 0;
+    return (value + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+}
+
+static struct kernel_result handle_map(uint64_t length, uint64_t flags) {
+    const uint64_t known = NARC_MAP_READ | NARC_MAP_WRITE;
+    if (!length || (flags & ~known) || !(flags & NARC_MAP_READ))
+        return result_error(NARC_INVALID_ARGUMENT);
+
+    uint64_t size = page_align(length);
+    uint64_t base = page_align(task_mmap_next());
+    if (!size || base < USER_MMAP_BASE || size > USER_MMAP_END - base)
+        return result_error(NARC_NO_MEMORY);
+
+    struct address_space *space = vmm_space_current();
+    uint64_t mapped = 0;
+    while (mapped < size) {
+        uint64_t phys = pmm_alloc_page();
+        if (!phys) break;
+        if (vmm_map_user(space, base + mapped, phys,
+                         (flags & NARC_MAP_WRITE) ? VMM_WRITE : 0) != 0) {
+            pmm_free_page(phys);
+            break;
+        }
+        mapped += PAGE_SIZE;
+    }
+    if (mapped != size) {
+        for (uint64_t off = 0; off < mapped; off += PAGE_SIZE)
+            vmm_unmap_user(space, base + off);
+        return result_error(NARC_NO_MEMORY);
+    }
+
+    task_set_mmap_next(base + size);
+    return result_ok(base);
+}
+
+static struct kernel_result handle_unmap(uint64_t address, uint64_t length) {
+    if (!length || (address & (PAGE_SIZE - 1)))
+        return result_error(NARC_INVALID_ARGUMENT);
+
+    uint64_t size = page_align(length);
+    if (!size || address < USER_MMAP_BASE || size > USER_MMAP_END - address)
+        return result_error(NARC_INVALID_ARGUMENT);
+
+    struct address_space *space = vmm_space_current();
+    for (uint64_t off = 0; off < size; off += PAGE_SIZE)
+        if (!vmm_user_phys(space, address + off))
+            return result_error(NARC_INVALID_ARGUMENT);
+    for (uint64_t off = 0; off < size; off += PAGE_SIZE)
+        vmm_unmap_user(space, address + off);
+    return result_ok(0);
+}
+
 static void return_result(struct task_frame *frame, struct kernel_result result) {
     arch_syscall_return2(frame, result.value, result.status);
 }
@@ -178,6 +235,12 @@ static void dispatch(struct task_frame *frame, uint64_t id) {
         return;
     case NARC_SYS_SEEK:
         return_result(frame, handle_seek(a1, (int64_t)a2, a3));
+        return;
+    case NARC_SYS_MAP:
+        return_result(frame, handle_map(a1, a2));
+        return;
+    case NARC_SYS_UNMAP:
+        return_result(frame, handle_unmap(a1, a2));
         return;
     default:
         return_result(frame, result_error(NARC_NOT_SUPPORTED));

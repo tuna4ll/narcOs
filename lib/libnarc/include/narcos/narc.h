@@ -20,6 +20,9 @@ narc_result_t narc_read(int fd, void *buffer, size_t length);
 narc_result_t narc_write(int fd, const void *buffer, size_t length);
 narc_result_t narc_seek(int fd, int64_t offset, uint32_t origin);
 
+narc_result_t narc_map(size_t length, uint32_t flags);
+narc_result_t narc_unmap(void *address, size_t length);
+
 #ifdef __cplusplus
 }
 #endif
